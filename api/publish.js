@@ -227,4 +227,4 @@ async function main(event) {
         };
     }
 }
-module.exports = { main };
+module.exports = main;
