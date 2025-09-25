@@ -46,7 +46,8 @@ async function main(event) {
                 console.log(`正在从以下 RSS Feed 获取内容: ${feedUrl}`);
                 const rssResponse = await fetch(feedUrl);
                 if (!rssResponse.ok) {
-                    throw new Error(`无法获取 RSS Feed: HTTP 状态码 ${rssResponse.status}`);
+                    console.error(`无法获取 RSS Feed: HTTP 状态码 ${rssResponse.status}`);
+                    continue;
                 }
                 const xmlText = await rssResponse.text();
                 const parser = new XMLParser();
@@ -73,7 +74,13 @@ async function main(event) {
         }
 
         if (!articleFound) {
-            throw new Error("RSS Feed 中没有找到任何有效文章。");
+            console.error("RSS Feed 中没有找到任何有效文章。");
+            return {
+                statusCode: 200,
+                body: JSON.stringify({
+                    message: "RSS Feed 中没有找到任何有效文章，本次运行跳过。"
+                })
+            };
         }
 
         // 步骤2: 访问网站并获取元数据
@@ -81,7 +88,7 @@ async function main(event) {
         let websiteDescription = selectedArticle.description || '';
         
         try {
-            const htmlResponse = await fetch(websiteUrl);
+            const htmlResponse = await fetch(websiteUrl, { timeout: 10000 });
             const htmlText = await htmlResponse.text();
             const root = parse(htmlText);
             
