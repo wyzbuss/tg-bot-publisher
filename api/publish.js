@@ -106,57 +106,13 @@ async function main(event) {
             console.error("无法获取网站元数据，使用RSS源数据作为备用。");
         }
 
-        // 步骤3: 使用 Vercel 自己的服务生成图片URL
-        // URL格式：https://assets.vercel.com/image/upload/{options}/{URL}
-        const encodedUrl = encodeURIComponent(websiteUrl);
-        const screenshotUrl1 = `https://assets.vercel.com/image/upload/v1700000000/screenshots/1280x720/${encodedUrl}`;
-        const screenshotUrl2 = `https://assets.vercel.com/image/upload/v1700000000/screenshots/1280x720/${encodedUrl}`;
-
-        console.log("已生成截图URL。");
-
-        // 步骤4: 整合富文本并发送到Telegram
-        const mediaGroupPayload = {
-            chat_id: CHANNEL_ID,
-            media: [{
-                type: 'photo',
-                media: screenshotUrl1,
-            }, {
-                type: 'photo',
-                media: screenshotUrl2,
-            }]
-        };
-
-        console.log("正在发送媒体组到Telegram...");
-
-        let mediaResponse;
-        try {
-            mediaResponse = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMediaGroup`, {
-                method: 'POST',
-                body: JSON.stringify(mediaGroupPayload),
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-            });
-            if (!mediaResponse.ok) {
-                const errorBody = await mediaResponse.text();
-                console.error(`Telegram API 错误: 状态码 ${mediaResponse.status} - ${errorBody}`);
-                throw new Error(`Telegram API 调用失败。`);
-            }
-        } catch (fetchError) {
-            console.error(`Telegram API 请求失败: ${fetchError.message}`);
-            throw new Error(`Telegram API 调用失败，请检查Bot Token和Channel ID。`);
-        }
-        
-        const mediaResult = await mediaResponse.json();
-        const messageId = mediaResult.result[0].message_id;
-
+        // 步骤3: 整合富文本并发送到Telegram
         const messageText = `**${websiteTitle}**\n\n${websiteDescription}\n\n**[查看网站](${websiteUrl})**`;
 
         const telegramTextPayload = {
             chat_id: CHANNEL_ID,
             text: messageText,
             parse_mode: 'Markdown',
-            reply_to_message_id: messageId,
         };
 
         console.log("正在发送富文本消息到Telegram...");
