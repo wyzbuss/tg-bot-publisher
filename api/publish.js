@@ -106,9 +106,11 @@ async function main(event) {
             console.error("无法获取网站元数据，使用RSS源数据作为备用。");
         }
 
-        // 步骤3: 使用免费服务生成图片URL
-        const screenshotUrl1 = `https://s.shots.so/embed?url=${encodeURIComponent(websiteUrl)}&width=1280&height=720`;
-        const screenshotUrl2 = `https://s.shots.so/embed?url=${encodeURIComponent(websiteUrl)}&width=1280&height=720`;
+        // 步骤3: 使用 Vercel 自己的服务生成图片URL
+        // URL格式：https://assets.vercel.com/image/upload/{options}/{URL}
+        const encodedUrl = encodeURIComponent(websiteUrl);
+        const screenshotUrl1 = `https://assets.vercel.com/image/upload/v1700000000/screenshots/1280x720/${encodedUrl}`;
+        const screenshotUrl2 = `https://assets.vercel.com/image/upload/v1700000000/screenshots/1280x720/${encodedUrl}`;
 
         console.log("已生成截图URL。");
 
@@ -136,7 +138,8 @@ async function main(event) {
                 },
             });
             if (!mediaResponse.ok) {
-                console.error(`Telegram API 错误: 状态码 ${mediaResponse.status} - ${await mediaResponse.text()}`);
+                const errorBody = await mediaResponse.text();
+                console.error(`Telegram API 错误: 状态码 ${mediaResponse.status} - ${errorBody}`);
                 throw new Error(`Telegram API 调用失败。`);
             }
         } catch (fetchError) {
