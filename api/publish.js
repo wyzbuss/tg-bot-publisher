@@ -58,13 +58,14 @@ async function main(event) {
         let rssData;
         try {
             rssData = parser.parse(xmlText);
+            console.log("XML 解析成功。");
         } catch (parseError) {
             console.error(`XML 解析失败: ${parseError.message}`);
             throw new Error(`XML 解析失败，RSS Feed 格式可能不正确。`);
         }
         
-        // 随机选择一篇文章
-        const articles = rssData.rss.channel.item || rssData.feed.entry; // 兼容不同格式
+        // 兼容性更新: 尝试解析 rss.channel 或 feed.entry
+        const articles = rssData.rss?.channel?.item || rssData.feed?.entry;
         if (!articles || articles.length === 0) {
             throw new Error("RSS Feed 中没有找到文章。");
         }
@@ -72,7 +73,7 @@ async function main(event) {
 
         const website = {
             url: article.link || article.id,
-            source: rssData.rss.channel.title || rssData.feed.title,
+            source: rssData.rss?.channel?.title || rssData.feed?.title,
             title: article.title,
             content: article.description || article['content:encoded'] || ''
         };
