@@ -1,12 +1,13 @@
 {
   "name": "telegram-publisher",
   "version": "1.0.0",
-  "description": "A serverless function to publish posts to Telegram.",
+  "description": "A Serverless function to publish posts to Telegram.",
   "main": "api/publish.js",
   "scripts": {
     "start": "vercel dev"
   },
   "dependencies": {
-    "fast-xml-parser": "^4.2.5"
+    "fast-xml-parser": "^4.3.5",
+    "node-html-parser": "^6.1.12"
   }
 }
