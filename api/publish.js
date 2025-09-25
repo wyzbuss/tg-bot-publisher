@@ -4,15 +4,17 @@ const {
 const {
     XMLParser
 } = require("fast-xml-parser");
+const {
+    parse
+} = require('node-html-parser');
 
 async function main(event) {
     // 从环境变量中获取敏感信息，保证安全
     const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
     const CHANNEL_ID = process.env.TELEGRAM_CHANNEL_ID;
-    const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 
     // 检查环境变量是否都已设置
-    if (!BOT_TOKEN || !CHANNEL_ID || !GEMINI_API_KEY) {
+    if (!BOT_TOKEN || !CHANNEL_ID) {
         console.error("错误：请在环境变量中设置所有必要的密钥。");
         return {
             statusCode: 500,
@@ -24,19 +26,17 @@ async function main(event) {
 
     try {
         // 步骤1: 从 RSS Feed 动态获取网站信息
-        // 链接聚合类网站的 RSS Feed 列表，确保内容源源不断
         const rssFeeds = [
-            'https://www.smzdm.com/jingxuan/rss/', // 什么值得买 - 购物优惠与生活方式
-            'https://www.ithome.com/rss/', // IT之家 - 综合数码科技
-            'https://www.chiphell.com/rss.xml', // Chiphell - 硬件数码社区
-            'https://www.gamersky.com/rss.html', // 游民星空 - 游戏资讯
-            'https://sspai.com/feed', // 少数派 - 效率与科技
-            'https://www.gcores.com/rss', // 机核网 - 游戏文化
-            'https://www.ifanr.com/feed', // 爱范儿 - 新潮科技
-            'https://www.feng.com/feed/' // 威锋网 - 苹果产品社区
+            'https://www.smzdm.com/jingxuan/rss/',
+            'https://www.ithome.com/rss/',
+            'https://www.chiphell.com/rss.xml',
+            'https://www.gamersky.com/rss.html',
+            'https://sspai.com/feed',
+            'https://www.gcores.com/rss',
+            'https://www.ifanr.com/feed',
+            'https://www.feng.com/feed/'
         ];
 
-        // 随机选择一个 RSS Feed
         const selectedFeed = rssFeeds[Math.floor(Math.random() * rssFeeds.length)];
         console.log(`正在从以下 RSS Feed 获取内容: ${selectedFeed}`);
 
@@ -52,8 +52,6 @@ async function main(event) {
         }
         
         const xmlText = await rssResponse.text();
-
-        // 使用 fast-xml-parser 解析 XML
         const parser = new XMLParser();
         let rssData;
         try {
@@ -64,111 +62,56 @@ async function main(event) {
             throw new Error(`XML 解析失败，RSS Feed 格式可能不正确。`);
         }
         
-        // 兼容性更新: 尝试解析 rss.channel 或 feed.entry
         const articles = rssData.rss?.channel?.item || rssData.feed?.entry;
         if (!articles || articles.length === 0) {
             throw new Error("RSS Feed 中没有找到文章。");
         }
         const article = Array.isArray(articles) ? articles[Math.floor(Math.random() * articles.length)] : articles;
-
-        const website = {
-            url: article.link || article.id,
-            source: rssData.rss?.channel?.title || rssData.feed?.title,
-            title: article.title,
-            content: article.description || article['content:encoded'] || ''
-        };
-        console.log("成功获取到一篇文章:", website.title);
-
-        // 步骤2: 使用AI生成标题和描述
-        const llmPayload = {
-            contents: [{
-                parts: [{
-                    text: `请为以下网页内容生成一个简洁的中文标题和一段吸引人的中文描述。内容来源是：${website.source}。请以JSON格式返回，包含"title"和"description"字段。内容：${website.content.substring(0, 3000)}`
-                }]
-            }],
-            generationConfig: {
-                responseMimeType: "application/json",
-                responseSchema: {
-                    type: "OBJECT",
-                    properties: {
-                        "title": {
-                            "type": "STRING"
-                        },
-                        "description": {
-                            "type": "STRING"
-                        }
-                    },
-                    "propertyOrdering": ["title", "description"]
-                }
-            }
-        };
-
-        let llmResponse;
-        try {
-            llmResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${GEMINI_API_KEY}`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify(llmPayload)
-            });
-            if (!llmResponse.ok) {
-                console.error(`LLM API 错误: 状态码 ${llmResponse.status} - ${await llmResponse.text()}`);
-                throw new Error(`LLM API 调用失败。`);
-            }
-        } catch (fetchError) {
-            console.error(`LLM API 请求失败: ${fetchError.message}`);
-            throw new Error(`LLM API 调用失败，请检查密钥是否正确。`);
-        }
         
-        const llmResult = await llmResponse.json();
-        const contentJson = JSON.parse(llmResult.candidates[0].content.parts[0].text);
-        const title = contentJson.title;
-        const description = contentJson.description;
-        console.log("AI成功生成标题和描述。");
+        const websiteUrl = article.link || article.id;
+        console.log("成功获取到一篇文章，正在获取网站信息:", websiteUrl);
 
-        // 步骤3: 使用AI生成图片
-        const imgPayload = {
-            instances: {
-                prompt: `A beautiful and futuristic digital art of a computer screen, with vibrant colors. The style should be modern and clean.`
-            },
-            parameters: {
-                "sampleCount": 2
-            }
-        };
-
-        let imgResponse;
-        try {
-            imgResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:predict?key=${GEMINI_API_KEY}`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify(imgPayload)
-            });
-            if (!imgResponse.ok) {
-                console.error(`Imagen API 错误: 状态码 ${imgResponse.status} - ${await imgResponse.text()}`);
-                throw new Error(`Imagen API 调用失败。`);
-            }
-        } catch (fetchError) {
-            console.error(`Imagen API 请求失败: ${fetchError.message}`);
-            throw new Error(`Imagen API 调用失败，请检查密钥是否正确。`);
-        }
+        // 步骤2: 访问网站并获取元数据
+        let websiteTitle = article.title;
+        let websiteDescription = article.description || '';
         
-        const imgResult = await imgResponse.json();
-        console.log("AI成功生成两张图片。");
+        try {
+            const htmlResponse = await fetch(websiteUrl);
+            const htmlText = await htmlResponse.text();
+            const root = parse(htmlText);
+            
+            const titleTag = root.querySelector('title');
+            if (titleTag && titleTag.text) {
+                websiteTitle = titleTag.text;
+            }
+
+            const descriptionMeta = root.querySelector('meta[name="description"]');
+            if (descriptionMeta && descriptionMeta.attributes.content) {
+                websiteDescription = descriptionMeta.attributes.content;
+            }
+        } catch (error) {
+            console.error("无法获取网站元数据，使用RSS源数据作为备用。");
+        }
+        console.log("成功获取网站元数据。");
+
+        // 步骤3: 使用免费服务生成图片URL
+        const screenshotUrl1 = `https://s.shots.so/embed?url=${encodeURIComponent(websiteUrl)}&width=1280&height=720`;
+        const screenshotUrl2 = `https://s.shots.so/embed?url=${encodeURIComponent(websiteUrl)}&width=1280&height=720`;
+
+        console.log("已生成截图URL。");
 
         // 步骤4: 整合富文本并发送到Telegram
         const mediaGroupPayload = {
             chat_id: CHANNEL_ID,
             media: [{
                 type: 'photo',
-                media: `data:image/png;base64,${imgResult.predictions[0].bytesBase64Encoded}`
+                media: screenshotUrl1,
             }, {
                 type: 'photo',
-                media: `data:image/png;base64,${imgResult.predictions[1].bytesBase64Encoded}`
+                media: screenshotUrl2,
             }]
         };
+
         console.log("正在发送媒体组到Telegram...");
 
         let mediaResponse;
@@ -190,9 +133,9 @@ async function main(event) {
         }
         
         const mediaResult = await mediaResponse.json();
-
         const messageId = mediaResult.result[0].message_id;
-        const messageText = `**${title}**\n\n${description}\n\n**[查看网站](${website.url})**`;
+
+        const messageText = `**${websiteTitle}**\n\n${websiteDescription}\n\n**[查看网站](${websiteUrl})**`;
 
         const telegramTextPayload = {
             chat_id: CHANNEL_ID,
@@ -200,6 +143,7 @@ async function main(event) {
             parse_mode: 'Markdown',
             reply_to_message_id: messageId,
         };
+
         console.log("正在发送富文本消息到Telegram...");
 
         await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
