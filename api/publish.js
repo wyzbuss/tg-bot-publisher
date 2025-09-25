@@ -37,43 +37,48 @@ async function main(event) {
             'https://www.feng.com/feed/'
         ];
 
-        const selectedFeed = rssFeeds[Math.floor(Math.random() * rssFeeds.length)];
-        console.log(`正在从以下 RSS Feed 获取内容: ${selectedFeed}`);
+        let articleFound = false;
+        let selectedArticle;
+        let websiteUrl;
 
-        let rssResponse;
-        try {
-            rssResponse = await fetch(selectedFeed);
-            if (!rssResponse.ok) {
-                throw new Error(`无法获取 RSS Feed: HTTP 状态码 ${rssResponse.status}`);
+        for (const feedUrl of rssFeeds) {
+            try {
+                console.log(`正在从以下 RSS Feed 获取内容: ${feedUrl}`);
+                const rssResponse = await fetch(feedUrl);
+                if (!rssResponse.ok) {
+                    throw new Error(`无法获取 RSS Feed: HTTP 状态码 ${rssResponse.status}`);
+                }
+                const xmlText = await rssResponse.text();
+                const parser = new XMLParser();
+                const rssData = parser.parse(xmlText);
+                
+                const articles = rssData.rss?.channel?.item || rssData.feed?.entry;
+
+                if (articles && articles.length > 0) {
+                    console.log(`成功找到 ${articles.length} 篇文章。`);
+                    selectedArticle = Array.isArray(articles) ? articles[Math.floor(Math.random() * articles.length)] : articles;
+                    websiteUrl = selectedArticle.link || selectedArticle.id;
+                    if (websiteUrl) {
+                        articleFound = true;
+                        console.log("成功获取到一篇文章，正在处理其信息:", websiteUrl);
+                        break;
+                    }
+                } else {
+                    console.log("该 RSS Feed 没有找到文章，跳过。");
+                }
+            } catch (error) {
+                console.error(`处理 RSS Feed ${feedUrl} 时发生错误: ${error.message}`);
+                // 继续尝试下一个 RSS 源
             }
-        } catch (fetchError) {
-            console.error(`RSS Feed 请求失败: ${fetchError.message}`);
-            throw new Error(`RSS Feed 请求失败，请检查网络或URL。`);
         }
-        
-        const xmlText = await rssResponse.text();
-        const parser = new XMLParser();
-        let rssData;
-        try {
-            rssData = parser.parse(xmlText);
-            console.log("XML 解析成功。");
-        } catch (parseError) {
-            console.error(`XML 解析失败: ${parseError.message}`);
-            throw new Error(`XML 解析失败，RSS Feed 格式可能不正确。`);
+
+        if (!articleFound) {
+            throw new Error("RSS Feed 中没有找到任何有效文章。");
         }
-        
-        const articles = rssData.rss?.channel?.item || rssData.feed?.entry;
-        if (!articles || articles.length === 0) {
-            throw new Error("RSS Feed 中没有找到文章。");
-        }
-        const article = Array.isArray(articles) ? articles[Math.floor(Math.random() * articles.length)] : articles;
-        
-        const websiteUrl = article.link || article.id;
-        console.log("成功获取到一篇文章，正在获取网站信息:", websiteUrl);
 
         // 步骤2: 访问网站并获取元数据
-        let websiteTitle = article.title;
-        let websiteDescription = article.description || '';
+        let websiteTitle = selectedArticle.title;
+        let websiteDescription = selectedArticle.description || '';
         
         try {
             const htmlResponse = await fetch(websiteUrl);
@@ -89,10 +94,10 @@ async function main(event) {
             if (descriptionMeta && descriptionMeta.attributes.content) {
                 websiteDescription = descriptionMeta.attributes.content;
             }
+            console.log("成功获取网站元数据。");
         } catch (error) {
             console.error("无法获取网站元数据，使用RSS源数据作为备用。");
         }
-        console.log("成功获取网站元数据。");
 
         // 步骤3: 使用免费服务生成图片URL
         const screenshotUrl1 = `https://s.shots.so/embed?url=${encodeURIComponent(websiteUrl)}&width=1280&height=720`;
