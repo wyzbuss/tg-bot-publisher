@@ -10,9 +10,9 @@ async function main(event) {
     const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
     const CHANNEL_ID = process.env.TELEGRAM_CHANNEL_ID;
     const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-    const IMAGEN_API_KEY = process.env.IMAGEN_API_KEY;
 
-    if (!BOT_TOKEN || !CHANNEL_ID || !GEMINI_API_KEY || !IMAGEN_API_KEY) {
+    // 检查环境变量是否都已设置
+    if (!BOT_TOKEN || !CHANNEL_ID || !GEMINI_API_KEY) {
         console.error("错误：请在环境变量中设置所有必要的密钥。");
         return {
             statusCode: 500,
@@ -40,15 +40,28 @@ async function main(event) {
         const selectedFeed = rssFeeds[Math.floor(Math.random() * rssFeeds.length)];
         console.log(`正在从以下 RSS Feed 获取内容: ${selectedFeed}`);
 
-        const rssResponse = await fetch(selectedFeed);
-        if (!rssResponse.ok) {
-            throw new Error(`无法获取 RSS Feed: ${rssResponse.statusText}`);
+        let rssResponse;
+        try {
+            rssResponse = await fetch(selectedFeed);
+            if (!rssResponse.ok) {
+                throw new Error(`无法获取 RSS Feed: HTTP 状态码 ${rssResponse.status}`);
+            }
+        } catch (fetchError) {
+            console.error(`RSS Feed 请求失败: ${fetchError.message}`);
+            throw new Error(`RSS Feed 请求失败，请检查网络或URL。`);
         }
+        
         const xmlText = await rssResponse.text();
 
         // 使用 fast-xml-parser 解析 XML
         const parser = new XMLParser();
-        const rssData = parser.parse(xmlText);
+        let rssData;
+        try {
+            rssData = parser.parse(xmlText);
+        } catch (parseError) {
+            console.error(`XML 解析失败: ${parseError.message}`);
+            throw new Error(`XML 解析失败，RSS Feed 格式可能不正确。`);
+        }
         
         // 随机选择一篇文章
         const articles = rssData.rss.channel.item || rssData.feed.entry; // 兼容不同格式
@@ -63,6 +76,7 @@ async function main(event) {
             title: article.title,
             content: article.description || article['content:encoded'] || ''
         };
+        console.log("成功获取到一篇文章:", website.title);
 
         // 步骤2: 使用AI生成标题和描述
         const llmPayload = {
@@ -88,17 +102,29 @@ async function main(event) {
             }
         };
 
-        const llmResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${GEMINI_API_KEY}`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify(llmPayload)
-        });
+        let llmResponse;
+        try {
+            llmResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${GEMINI_API_KEY}`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(llmPayload)
+            });
+            if (!llmResponse.ok) {
+                console.error(`LLM API 错误: 状态码 ${llmResponse.status} - ${await llmResponse.text()}`);
+                throw new Error(`LLM API 调用失败。`);
+            }
+        } catch (fetchError) {
+            console.error(`LLM API 请求失败: ${fetchError.message}`);
+            throw new Error(`LLM API 调用失败，请检查密钥是否正确。`);
+        }
+        
         const llmResult = await llmResponse.json();
         const contentJson = JSON.parse(llmResult.candidates[0].content.parts[0].text);
         const title = contentJson.title;
         const description = contentJson.description;
+        console.log("AI成功生成标题和描述。");
 
         // 步骤3: 使用AI生成图片
         const imgPayload = {
@@ -110,14 +136,26 @@ async function main(event) {
             }
         };
 
-        const imgResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:predict?key=${IMAGEN_API_KEY}`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify(imgPayload)
-        });
+        let imgResponse;
+        try {
+            imgResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:predict?key=${GEMINI_API_KEY}`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(imgPayload)
+            });
+            if (!imgResponse.ok) {
+                console.error(`Imagen API 错误: 状态码 ${imgResponse.status} - ${await imgResponse.text()}`);
+                throw new Error(`Imagen API 调用失败。`);
+            }
+        } catch (fetchError) {
+            console.error(`Imagen API 请求失败: ${fetchError.message}`);
+            throw new Error(`Imagen API 调用失败，请检查密钥是否正确。`);
+        }
+        
         const imgResult = await imgResponse.json();
+        console.log("AI成功生成两张图片。");
 
         // 步骤4: 整合富文本并发送到Telegram
         const mediaGroupPayload = {
@@ -130,14 +168,26 @@ async function main(event) {
                 media: `data:image/png;base64,${imgResult.predictions[1].bytesBase64Encoded}`
             }]
         };
+        console.log("正在发送媒体组到Telegram...");
 
-        const mediaResponse = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMediaGroup`, {
-            method: 'POST',
-            body: JSON.stringify(mediaGroupPayload),
-            headers: {
-                'Content-Type': 'application/json'
-            },
-        });
+        let mediaResponse;
+        try {
+            mediaResponse = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMediaGroup`, {
+                method: 'POST',
+                body: JSON.stringify(mediaGroupPayload),
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+            });
+            if (!mediaResponse.ok) {
+                console.error(`Telegram API 错误: 状态码 ${mediaResponse.status} - ${await mediaResponse.text()}`);
+                throw new Error(`Telegram API 调用失败。`);
+            }
+        } catch (fetchError) {
+            console.error(`Telegram API 请求失败: ${fetchError.message}`);
+            throw new Error(`Telegram API 调用失败，请检查Bot Token和Channel ID。`);
+        }
+        
         const mediaResult = await mediaResponse.json();
 
         const messageId = mediaResult.result[0].message_id;
@@ -149,6 +199,7 @@ async function main(event) {
             parse_mode: 'Markdown',
             reply_to_message_id: messageId,
         };
+        console.log("正在发送富文本消息到Telegram...");
 
         await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
             method: 'POST',
@@ -176,4 +227,4 @@ async function main(event) {
         };
     }
 }
-
+module.exports = { main };
