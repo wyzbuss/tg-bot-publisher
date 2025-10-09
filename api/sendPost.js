@@ -1,4 +1,4 @@
-import { writeFile, readFile, unlink } from 'fs/promises';
+import { writeFile, unlink } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import https from 'https';
@@ -13,7 +13,7 @@ const CHANNEL_ID = process.env.TELEGRAM_CHANNEL_ID;
 const getPostContent = () => {
   return {
     images: [
-      'https://picsum.photos/800/600?random=1',
+      'https://picsum.photos/800/600?random=1',  // 建议使用宽高比接近的图片以获得更好的并排效果
       'https://picsum.photos/800/600?random=2'
     ],
     caption: `每日精选图片\n\n第一张图片：美丽的自然风光\n第二张图片：城市建筑景观\n\n#每日分享 #图片`
@@ -73,130 +73,136 @@ const downloadImage = async (url, maxRedirects = 3) => {
   }
 };
 
-// 使用Node.js内置https模块发送POST请求（支持form-data）
-const httpsPostFormData = (url, formData) => {
-  return new Promise((resolve, reject) => {
-    // 异步获取内容长度
-    formData.getLength((err, length) => {
-      if (err) {
-        reject(err);
-        return;
-      }
-
-      const options = {
-        method: 'POST',
-        headers: {
-          ...formData.getHeaders(),
-          'Content-Length': length
-        }
-      };
-
-      const req = https.request(url, options, (res) => {
-        let responseData = '';
-        
-        res.on('data', (chunk) => {
-          responseData += chunk;
-        });
-        
-        res.on('end', () => {
-          try {
-            resolve(JSON.parse(responseData));
-          } catch (e) {
-            resolve(responseData);
-          }
-        });
-      });
-      
-      req.on('error', reject);
-      
-      // 将formData数据通过管道发送
-      formData.pipe(req);
-    });
-  });
-};
-
-// 使用Node.js内置https模块发送JSON POST请求
-const httpsPostJson = (url, data) => {
-  return new Promise((resolve, reject) => {
-    const jsonData = JSON.stringify(data);
-    
-    const options = {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Content-Length': Buffer.byteLength(jsonData)
-      }
-    };
-
-    const req = https.request(url, options, (res) => {
-      let responseData = '';
-      
-      res.on('data', (chunk) => {
-        responseData += chunk;
-      });
-      
-      res.on('end', () => {
-        try {
-          resolve(JSON.parse(responseData));
-        } catch (e) {
-          resolve(responseData);
-        }
-      });
-    });
-    
-    req.on('error', reject);
-    req.write(jsonData);
-    req.end();
-  });
-};
-
-// 上传图片到Telegram并获取file_id
-const uploadImage = async (filePath) => {
+// 获取图片的file_id（仅上传不发送）
+const getFileId = async (filePath) => {
   try {
     const formData = new FormData();
     formData.append('chat_id', CHANNEL_ID);
     formData.append('photo', fs.createReadStream(filePath));
+    formData.append('disable_notification', 'true'); // 静默上传，不通知用户
     
-    // 使用专门处理form-data的POST方法
-    const response = await httpsPostFormData(
-      `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendPhoto`,
-      formData
-    );
-    
-    if (!response.ok) {
-      throw new Error(`Telegram API 错误: ${JSON.stringify(response)}`);
-    }
-    
-    return response.result.photo[response.result.photo.length - 1].file_id;
+    return new Promise((resolve, reject) => {
+      formData.getLength((err, length) => {
+        if (err) {
+          reject(err);
+          return;
+        }
+
+        const options = {
+          method: 'POST',
+          headers: {
+            ...formData.getHeaders(),
+            'Content-Length': length
+          }
+        };
+
+        const req = https.request(
+          `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendPhoto`,
+          options,
+          (res) => {
+            let responseData = '';
+            
+            res.on('data', (chunk) => {
+              responseData += chunk;
+            });
+            
+            res.on('end', () => {
+              try {
+                const data = JSON.parse(responseData);
+                if (!data.ok) {
+                  reject(new Error(`Telegram API 错误: ${JSON.stringify(data)}`));
+                  return;
+                }
+                
+                // 上传成功后立即删除这张临时发送的图片
+                https.request(
+                  `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/deleteMessage`,
+                  {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                  },
+                  (deleteRes) => deleteRes.resume()
+                )
+                .on('error', (deleteErr) => console.error('删除临时图片失败:', deleteErr))
+                .end(JSON.stringify({
+                  chat_id: CHANNEL_ID,
+                  message_id: data.result.message_id
+                }));
+                
+                resolve(data.result.photo[data.result.photo.length - 1].file_id);
+              } catch (e) {
+                reject(new Error(`解析响应失败: ${e.message}`));
+              }
+            }
+          }
+        );
+        
+        req.on('error', reject);
+        formData.pipe(req);
+      });
+    });
   } catch (error) {
-    console.error('上传图片出错:', error);
+    console.error('获取file_id出错:', error);
     throw error;
   }
 };
 
-// 发送媒体组
+// 发送媒体组（主要展示方式）
 const sendMediaGroup = async (fileIds, caption) => {
   try {
+    // 构建媒体组
     const media = fileIds.map((fileId, index) => ({
       type: 'photo',
       media: fileId,
+      // 只有第一个媒体添加标题
       caption: index === 0 ? caption : undefined,
       parse_mode: 'HTML'
     }));
     
-    const response = await httpsPostJson(
-      `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMediaGroup`,
-      {
+    return new Promise((resolve, reject) => {
+      const data = JSON.stringify({
         chat_id: CHANNEL_ID,
-        media: JSON.stringify(media)
-      }
-    );
-    
-    if (!response.ok) {
-      throw new Error(`发送媒体组失败: ${JSON.stringify(response)}`);
-    }
-    
-    return response.data;
+        media: JSON.stringify(media),
+        disable_notification: 'false' // 这个是正式发送，需要通知
+      });
+      
+      const options = {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(data)
+        }
+      };
+
+      const req = https.request(
+        `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMediaGroup`,
+        options,
+        (res) => {
+          let responseData = '';
+          
+          res.on('data', (chunk) => {
+            responseData += chunk;
+          });
+          
+          res.on('end', () => {
+            try {
+              const result = JSON.parse(responseData);
+              if (!result.ok) {
+                reject(new Error(`发送媒体组失败: ${JSON.stringify(result)}`));
+                return;
+              }
+              resolve(result);
+            } catch (e) {
+              reject(new Error(`解析媒体组响应失败: ${e.message}`));
+            }
+          }
+        }
+      );
+      
+      req.on('error', reject);
+      req.write(data);
+      req.end();
+    });
   } catch (error) {
     console.error('发送媒体组出错:', error);
     throw error;
@@ -217,6 +223,8 @@ export default async function handler(req, res) {
   
   try {
     const postContent = getPostContent();
+    
+    // 下载图片
     const filePaths = await Promise.all(
       postContent.images.map(async (url) => {
         const filePath = await downloadImage(url);
@@ -225,10 +233,12 @@ export default async function handler(req, res) {
       })
     );
     
+    // 获取file_id（临时上传后立即删除）
     const fileIds = await Promise.all(
-      filePaths.map(filePath => uploadImage(filePath))
+      filePaths.map(filePath => getFileId(filePath))
     );
     
+    // 只发送媒体组，不单独发送图片
     const result = await sendMediaGroup(fileIds, postContent.caption);
     
     res.status(200).json({ 
@@ -244,6 +254,7 @@ export default async function handler(req, res) {
       error: error.message 
     });
   } finally {
+    // 清理临时文件
     for (const file of tempFiles) {
       try {
         await unlink(file);
