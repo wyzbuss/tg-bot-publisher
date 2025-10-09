@@ -1,3 +1,14 @@
+// 在 api/sendPost.js 最顶部添加
+process.removeAllListeners('warning');
+process.on('warning', (warning) => {
+  // 只忽略 util.isArray 的 deprecation 警告
+  if (warning.name === 'DeprecationWarning' && warning.message.includes('util.isArray')) {
+    return;
+  }
+  // 其他警告正常输出
+  console.warn(warning);
+});
+
 const { writeFile, unlink } = require('fs/promises');
 const { tmpdir } = require('os');
 const { join } = require('path');
