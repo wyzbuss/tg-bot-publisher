@@ -1,16 +1,16 @@
-import { writeFile, unlink } from 'fs/promises';
-import { tmpdir } from 'os';
-import { join } from 'path';
-import https from 'https';
-import fs from 'fs';
-import FormData from 'form-data';
+const { writeFile, unlink } = require('fs/promises');
+const { tmpdir } = require('os');
+const { join } = require('path');
+const https = require('https');
+const fs = require('fs');
+const FormData = require('form-data');
 
 // 环境变量
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const CHANNEL_ID = process.env.TELEGRAM_CHANNEL_ID;
 
 // 获取帖子内容
-const getPostContent = function() {
+function getPostContent() {
   return {
     images: [
       'https://picsum.photos/800/600?random=1',
@@ -18,10 +18,11 @@ const getPostContent = function() {
     ],
     caption: '每日精选图片\n\n第一张图片：美丽的自然风光\n第二张图片：城市建筑景观\n\n#每日分享 #图片'
   };
-};
+}
 
 // 下载图片
-const downloadImage = async function(url, maxRedirects = 3) {
+async function downloadImage(url, maxRedirects) {
+  maxRedirects = maxRedirects || 3;
   if (maxRedirects <= 0) {
     throw new Error('超过最大重定向次数');
   }
@@ -73,10 +74,10 @@ const downloadImage = async function(url, maxRedirects = 3) {
     console.error('下载图片出错:', error);
     throw error;
   }
-};
+}
 
 // 获取图片file_id
-const getFileId = async function(filePath) {
+async function getFileId(filePath) {
   try {
     const formData = new FormData();
     formData.append('chat_id', CHANNEL_ID);
@@ -90,11 +91,12 @@ const getFileId = async function(filePath) {
           return;
         }
 
+        const headers = formData.getHeaders();
+        headers['Content-Length'] = length;
+        
         const options = {
           method: 'POST',
-          headers: Object.assign(formData.getHeaders(), {
-            'Content-Length': length
-          })
+          headers: headers
         };
 
         const req = https.request(
@@ -116,20 +118,24 @@ const getFileId = async function(filePath) {
                 }
                 
                 // 删除临时消息
-                https.request(
+                const deleteOptions = {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' }
+                };
+                
+                const deleteReq = https.request(
                   'https://api.telegram.org/bot' + TELEGRAM_BOT_TOKEN + '/deleteMessage',
-                  {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' }
-                  },
+                  deleteOptions,
                   function(deleteRes) {
                     deleteRes.resume();
                   }
-                )
-                .on('error', function(deleteErr) {
+                );
+                
+                deleteReq.on('error', function(deleteErr) {
                   console.error('删除临时图片失败:', deleteErr);
-                })
-                .end(JSON.stringify({
+                });
+                
+                deleteReq.end(JSON.stringify({
                   chat_id: CHANNEL_ID,
                   message_id: data.result.message_id
                 }));
@@ -150,19 +156,20 @@ const getFileId = async function(filePath) {
     console.error('获取file_id出错:', error);
     throw error;
   }
-};
+}
 
 // 发送媒体组
-const sendMediaGroup = async function(fileIds, caption) {
+async function sendMediaGroup(fileIds, caption) {
   try {
-    const media = fileIds.map(function(fileId, index) {
-      return {
+    const media = [];
+    for (let i = 0; i < fileIds.length; i++) {
+      media.push({
         type: 'photo',
-        media: fileId,
-        caption: index === 0 ? caption : undefined,
+        media: fileIds[i],
+        caption: i === 0 ? caption : undefined,
         parse_mode: 'HTML'
-      };
-    });
+      });
+    }
     
     return new Promise(function(resolve, reject) {
       const data = JSON.stringify({
@@ -212,10 +219,10 @@ const sendMediaGroup = async function(fileIds, caption) {
     console.error('发送媒体组出错:', error);
     throw error;
   }
-};
+}
 
 // 主处理函数
-export default async function handler(req, res) {
+module.exports = async function handler(req, res) {
   if (req.method !== 'POST' && req.method !== 'GET') {
     return res.status(405).json({ message: '只允许POST和GET请求' });
   }
@@ -228,19 +235,18 @@ export default async function handler(req, res) {
   
   try {
     const postContent = getPostContent();
-    const filePaths = await Promise.all(
-      postContent.images.map(async function(url) {
-        const filePath = await downloadImage(url);
-        tempFiles.push(filePath);
-        return filePath;
-      })
-    );
+    const filePaths = [];
+    for (let i = 0; i < postContent.images.length; i++) {
+      const filePath = await downloadImage(postContent.images[i]);
+      tempFiles.push(filePath);
+      filePaths.push(filePath);
+    }
     
-    const fileIds = await Promise.all(
-      filePaths.map(function(filePath) {
-        return getFileId(filePath);
-      })
-    );
+    const fileIds = [];
+    for (let i = 0; i < filePaths.length; i++) {
+      const fileId = await getFileId(filePaths[i]);
+      fileIds.push(fileId);
+    }
     
     const result = await sendMediaGroup(fileIds, postContent.caption);
     
@@ -257,17 +263,17 @@ export default async function handler(req, res) {
       error: error.message 
     });
   } finally {
-    for (const file of tempFiles) {
+    for (let i = 0; i < tempFiles.length; i++) {
       try {
-        await unlink(file);
+        await unlink(tempFiles[i]);
       } catch (cleanupError) {
-        console.error('清理临时文件 ' + file + ' 失败:', cleanupError);
+        console.error('清理临时文件 ' + tempFiles[i] + ' 失败:', cleanupError);
       }
     }
   }
-}
+};
 
-export const config = {
+module.exports.config = {
   runtime: 'nodejs'
 };
     
