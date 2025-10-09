@@ -13,10 +13,10 @@ const CHANNEL_ID = process.env.TELEGRAM_CHANNEL_ID;
 const getPostContent = () => {
   return {
     images: [
-      'https://picsum.photos/800/600?random=1',  // 建议使用宽高比接近的图片以获得更好的并排效果
+      'https://picsum.photos/800/600?random=1',
       'https://picsum.photos/800/600?random=2'
     ],
-    caption: `每日精选图片\n\n第一张图片：美丽的自然风光\n第二张图片：城市建筑景观\n\n#每日分享 #图片`
+    caption: '每日精选图片\n\n第一张图片：美丽的自然风光\n第二张图片：城市建筑景观\n\n#每日分享 #图片'
   };
 };
 
@@ -266,6 +266,6 @@ export default async function handler(req, res) {
 }
 
 export const config = {
-  runtime: 'nodejs',
+  runtime: 'nodejs'
 };
     
