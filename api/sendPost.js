@@ -32,7 +32,6 @@ async function downloadImage(url, maxRedirects) {
     
     return new Promise(function(resolve, reject) {
       const request = https.get(url, function(response) {
-        // 处理重定向
         if (response.statusCode === 301 || response.statusCode === 302) {
           const redirectUrl = response.headers.location;
           if (!redirectUrl) {
@@ -47,7 +46,6 @@ async function downloadImage(url, maxRedirects) {
           return;
         }
         
-        // 正常响应
         if (response.statusCode !== 200) {
           reject(new Error('下载图片失败，状态码: ' + response.statusCode));
           return;
@@ -273,7 +271,5 @@ module.exports = async function handler(req, res) {
   }
 };
 
-module.exports.config = {
-  runtime: 'nodejs'
-};
+module.exports.config = { runtime: 'nodejs' };
     
