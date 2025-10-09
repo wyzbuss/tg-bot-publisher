@@ -9,7 +9,7 @@
   "dependencies": {
     "fast-xml-parser": "^4.3.5",
     "node-html-parser": "^6.1.12",
-    "form-data": "^4.0.1"
+    "form-data": "4.0.1"
   }
 }
 
