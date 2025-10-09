@@ -1,4 +1,3 @@
-// api/sendPost.js（仅修复语法，保留原有核心逻辑）
 const { writeFile, unlink } = require('fs/promises');
 const { tmpdir } = require('os');
 const { join } = require('path');
@@ -6,11 +5,11 @@ const https = require('https');
 const fs = require('fs');
 const FormData = require('form-data');
 
-// 环境变量（和你之前配置一致）
+// 环境变量
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const CHANNEL_ID = process.env.TELEGRAM_CHANNEL_ID;
 
-// 1. 获取帖子内容（保留你之前的图片和文案）
+// 1. 获取帖子内容
 function getPostContent() {
   return {
     images: [
@@ -21,7 +20,7 @@ function getPostContent() {
   };
 }
 
-// 2. 下载图片（保留重定向处理，修复括号）
+// 2. 下载图片（保留重定向处理）
 async function downloadImage(url, maxRedirects = 3) {
   if (maxRedirects <= 0) throw new Error('超过最大重定向次数');
   
@@ -46,7 +45,7 @@ async function downloadImage(url, maxRedirects = 3) {
   });
 }
 
-// 3. 获取FileId（保留临时删除，修复语法）
+// 3. 获取FileId（修复FormData发送方式）
 async function getFileId(filePath) {
   const formData = new FormData();
   formData.append('chat_id', CHANNEL_ID);
@@ -59,7 +58,8 @@ async function getFileId(filePath) {
       const headers = formData.getHeaders();
       headers['Content-Length'] = length;
       
-      https.request({
+      // 创建请求
+      const req = https.request({
         hostname: 'api.telegram.org',
         path: '/bot' + TELEGRAM_BOT_TOKEN + '/sendPhoto',
         method: 'POST',
@@ -82,12 +82,15 @@ async function getFileId(filePath) {
           }));
           resolve(result.result.photo[result.result.photo.length - 1].file_id);
         });
-      }).on('error', reject).end(formData);
+      }).on('error', reject);
+      
+      // 关键修复：使用pipe发送FormData，而不是end
+      formData.pipe(req);
     });
   });
 }
 
-// 4. 发送媒体组（保留你要的“只发一次+横向”）
+// 4. 发送媒体组
 async function sendMediaGroup(fileIds, caption) {
   const media = JSON.stringify([
     { type: 'photo', media: fileIds[0], caption: caption, parse_mode: 'HTML' },
@@ -113,7 +116,7 @@ async function sendMediaGroup(fileIds, caption) {
   });
 }
 
-// 主函数（和你之前成功时的逻辑一致）
+// 主函数
 module.exports = async function handler(req, res) {
   if (req.method !== 'POST' && req.method !== 'GET') {
     return res.status(405).json({ message: '只允许POST/GET' });
@@ -133,7 +136,7 @@ module.exports = async function handler(req, res) {
     }));
     // 获取FileId
     const ids = await Promise.all(paths.map(path => getFileId(path)));
-    // 发送媒体组（只发这一次）
+    // 发送媒体组
     const result = await sendMediaGroup(ids, content.caption);
     
     res.status(200).json({ success: true, result: result });
@@ -147,5 +150,6 @@ module.exports = async function handler(req, res) {
   }
 };
 
-// 运行时配置（固定）
+// 运行时配置
 module.exports.config = { runtime: 'nodejs' };
+    
