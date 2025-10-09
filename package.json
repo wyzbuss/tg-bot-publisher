@@ -2,12 +2,15 @@
   "name": "telegram-publisher",
   "version": "1.0.0",
   "description": "A Serverless function to publish posts to Telegram.",
-  "main": "api/publish.js",
+  "main": "api/sendPost.js",  // 注意这里也需要同步更新为主文件
   "scripts": {
     "start": "vercel dev"
   },
   "dependencies": {
     "fast-xml-parser": "^4.3.5",
-    "node-html-parser": "^6.1.12"
+    "node-html-parser": "^6.1.12",
+    "axios": "^1.6.8",  // 新增：用于HTTP请求
+    "form-data": "^4.0.0"  // 新增：用于处理表单数据（上传图片）
   }
 }
+
