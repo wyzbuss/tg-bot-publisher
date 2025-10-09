@@ -173,5 +173,5 @@ export default async function handler(req, res) {
 
 // 为了使Vercel Edge Functions正常工作，需要添加这个
 export const config = {
-  runtime: 'nodejs18.x',
+  runtime: 'nodejs', // 仅支持 edge/experimental-edge/nodejs，这里用 nodejs 即可
 };
