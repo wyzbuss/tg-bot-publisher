@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "description": "A Serverless function to publish posts to Telegram.",
   "main": "api/sendPost.js", 
+  "type": "module", 
   "scripts": {
     "start": "vercel dev"
   },
