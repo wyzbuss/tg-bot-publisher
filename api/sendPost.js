@@ -22,7 +22,6 @@ const getPostContent = () => {
 
 // 下载图片到临时文件（支持重定向）
 const downloadImage = async (url, maxRedirects = 3) => {
-  // 限制最大重定向次数，防止无限循环
   if (maxRedirects <= 0) {
     throw new Error('超过最大重定向次数');
   }
@@ -32,7 +31,7 @@ const downloadImage = async (url, maxRedirects = 3) => {
     
     return new Promise((resolve, reject) => {
       const request = https.get(url, (response) => {
-        // 处理重定向（301永久重定向或302临时重定向）
+        // 处理重定向
         if (response.statusCode === 301 || response.statusCode === 302) {
           const redirectUrl = response.headers.location;
           if (!redirectUrl) {
@@ -40,9 +39,7 @@ const downloadImage = async (url, maxRedirects = 3) => {
             return;
           }
           
-          // 关闭当前响应，跟随重定向
           response.resume();
-          // 递归调用下载函数，减少剩余重定向次数
           downloadImage(redirectUrl, maxRedirects - 1)
             .then(resolve)
             .catch(reject);
@@ -76,12 +73,59 @@ const downloadImage = async (url, maxRedirects = 3) => {
   }
 };
 
-// 使用Node.js内置https模块发送POST请求
-const httpsPost = (url, data, headers = {}) => {
+// 使用Node.js内置https模块发送POST请求（支持form-data）
+const httpsPostFormData = (url, formData) => {
   return new Promise((resolve, reject) => {
+    // 异步获取内容长度
+    formData.getLength((err, length) => {
+      if (err) {
+        reject(err);
+        return;
+      }
+
+      const options = {
+        method: 'POST',
+        headers: {
+          ...formData.getHeaders(),
+          'Content-Length': length
+        }
+      };
+
+      const req = https.request(url, options, (res) => {
+        let responseData = '';
+        
+        res.on('data', (chunk) => {
+          responseData += chunk;
+        });
+        
+        res.on('end', () => {
+          try {
+            resolve(JSON.parse(responseData));
+          } catch (e) {
+            resolve(responseData);
+          }
+        });
+      });
+      
+      req.on('error', reject);
+      
+      // 将formData数据通过管道发送
+      formData.pipe(req);
+    });
+  });
+};
+
+// 使用Node.js内置https模块发送JSON POST请求
+const httpsPostJson = (url, data) => {
+  return new Promise((resolve, reject) => {
+    const jsonData = JSON.stringify(data);
+    
     const options = {
       method: 'POST',
-      headers: { ...headers }
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(jsonData)
+      }
     };
 
     const req = https.request(url, options, (res) => {
@@ -95,17 +139,13 @@ const httpsPost = (url, data, headers = {}) => {
         try {
           resolve(JSON.parse(responseData));
         } catch (e) {
-          resolve(responseData); // 非JSON响应直接返回
+          resolve(responseData);
         }
       });
     });
     
     req.on('error', reject);
-    
-    if (data) {
-      req.write(data);
-    }
-    
+    req.write(jsonData);
     req.end();
   });
 };
@@ -117,13 +157,10 @@ const uploadImage = async (filePath) => {
     formData.append('chat_id', CHANNEL_ID);
     formData.append('photo', fs.createReadStream(filePath));
     
-    const headers = formData.getHeaders();
-    headers['Content-Length'] = formData.getLengthSync();
-    
-    const response = await httpsPost(
+    // 使用专门处理form-data的POST方法
+    const response = await httpsPostFormData(
       `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendPhoto`,
-      formData,
-      headers
+      formData
     );
     
     if (!response.ok) {
@@ -147,13 +184,12 @@ const sendMediaGroup = async (fileIds, caption) => {
       parse_mode: 'HTML'
     }));
     
-    const response = await httpsPost(
+    const response = await httpsPostJson(
       `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMediaGroup`,
-      JSON.stringify({
+      {
         chat_id: CHANNEL_ID,
         media: JSON.stringify(media)
-      }),
-      { 'Content-Type': 'application/json' }
+      }
     );
     
     if (!response.ok) {
