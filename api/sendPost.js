@@ -3,7 +3,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import https from 'https';
 import fs from 'fs';
-import FormData from 'form-data'; // 仅保留这个第三方库
+import FormData from 'form-data';
 
 // Telegram Bot API 配置
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
@@ -20,13 +20,36 @@ const getPostContent = () => {
   };
 };
 
-// 下载图片到临时文件
-const downloadImage = async (url) => {
+// 下载图片到临时文件（支持重定向）
+const downloadImage = async (url, maxRedirects = 3) => {
+  // 限制最大重定向次数，防止无限循环
+  if (maxRedirects <= 0) {
+    throw new Error('超过最大重定向次数');
+  }
+
   try {
     const tmpFilePath = join(tmpdir(), `temp-${Date.now()}.jpg`);
     
     return new Promise((resolve, reject) => {
-      https.get(url, (response) => {
+      const request = https.get(url, (response) => {
+        // 处理重定向（301永久重定向或302临时重定向）
+        if (response.statusCode === 301 || response.statusCode === 302) {
+          const redirectUrl = response.headers.location;
+          if (!redirectUrl) {
+            reject(new Error('重定向但未提供目标URL'));
+            return;
+          }
+          
+          // 关闭当前响应，跟随重定向
+          response.resume();
+          // 递归调用下载函数，减少剩余重定向次数
+          downloadImage(redirectUrl, maxRedirects - 1)
+            .then(resolve)
+            .catch(reject);
+          return;
+        }
+        
+        // 处理正常响应
         if (response.statusCode !== 200) {
           reject(new Error(`下载图片失败，状态码: ${response.statusCode}`));
           return;
@@ -43,7 +66,9 @@ const downloadImage = async (url) => {
           unlink(tmpFilePath).catch(() => {});
           reject(err);
         });
-      }).on('error', reject);
+      });
+      
+      request.on('error', reject);
     });
   } catch (error) {
     console.error('下载图片出错:', error);
@@ -51,7 +76,7 @@ const downloadImage = async (url) => {
   }
 };
 
-// 使用Node.js内置https模块发送POST请求（替代axios）
+// 使用Node.js内置https模块发送POST请求
 const httpsPost = (url, data, headers = {}) => {
   return new Promise((resolve, reject) => {
     const options = {
@@ -77,7 +102,6 @@ const httpsPost = (url, data, headers = {}) => {
     
     req.on('error', reject);
     
-    // 发送数据
     if (data) {
       req.write(data);
     }
@@ -93,7 +117,6 @@ const uploadImage = async (filePath) => {
     formData.append('chat_id', CHANNEL_ID);
     formData.append('photo', fs.createReadStream(filePath));
     
-    // 获取form-data的边界和长度
     const headers = formData.getHeaders();
     headers['Content-Length'] = formData.getLengthSync();
     
