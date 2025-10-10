@@ -6,6 +6,9 @@ on:
   workflow_dispatch: # 手动触发
   push:  # 新增：当 preview 分支有代码推送时自动触发（方便测试）
     branches: [preview]
+    paths:                # 仅当以下文件修改时才触发
+      - 'scripts/fetch-websites.js'  # 抓取脚本本身修改
+      - '.github/workflows/fetch-websites.yml'  # 工作流配置修改
 
 jobs:
   fetch:
