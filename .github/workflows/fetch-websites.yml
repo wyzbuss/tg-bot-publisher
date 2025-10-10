@@ -1,0 +1,28 @@
+name: Fetch New Websites
+
+on:
+  schedule:
+    - cron: '0 2 * * *' # 每天凌晨2点（UTC）执行
+  workflow_dispatch: # 手动触发
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Install dependencies
+        run: |
+          npm init -y
+          npm install @octokit/rest moment
+
+      - name: Run fetch script
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN_FOR_FETCH }}
+        run: node scripts/fetch-websites.js
