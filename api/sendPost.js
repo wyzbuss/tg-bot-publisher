@@ -6,39 +6,28 @@ const FormData = require('form-data');
 
 // 环境变量
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
-const CHANNEL_ID = process.env.TELEGRAM_CHANNEL_ID;
+const CHANNEL_ID = process.env.CHANNEL_ID;
 
-// 步骤1：下载图片（支持重定向）
-async function downloadImageWithRedirects(url, maxRedirects = 3) {
-  // 限制最大重定向次数，防止循环重定向
-  if (maxRedirects <= 0) {
-    throw new Error('超过最大重定向次数');
-  }
+// 1. 下载图片（支持重定向，确保能获取图片）
+async function downloadImage(url, maxRedirects = 3) {
+  if (maxRedirects <= 0) throw new Error('超过最大重定向次数');
 
-  const tempFilePath = join(tmpdir(), `image-${Date.now()}.jpg`);
+  const tempFilePath = join(tmpdir(), `img-${Date.now()}.jpg`);
   
   return new Promise((resolve, reject) => {
     const request = https.get(url, (res) => {
       // 处理重定向
       if (res.statusCode === 301 || res.statusCode === 302) {
         const redirectUrl = res.headers.location;
-        if (!redirectUrl) {
-          reject(new Error('重定向但未提供目标URL'));
-          return;
-        }
-        
-        // 释放当前连接资源
+        if (!redirectUrl) { reject(new Error('无重定向URL')); return; }
         res.resume();
-        // 跟随重定向，减少剩余重定向次数
-        downloadImageWithRedirects(redirectUrl, maxRedirects - 1)
-          .then(resolve)
-          .catch(reject);
+        downloadImage(redirectUrl, maxRedirects - 1).then(resolve).catch(reject);
         return;
       }
       
-      // 处理正常响应
-      if (res.statusCode !== 200) {
-        reject(new Error(`下载图片失败，状态码: ${res.statusCode}`));
+      // 验证有效响应
+      if (res.statusCode !== 200) { 
+        reject(new Error(`下载失败，状态码: ${res.statusCode}`)); 
         return;
       }
       
@@ -47,9 +36,7 @@ async function downloadImageWithRedirects(url, maxRedirects = 3) {
       res.pipe(fileStream);
       
       fileStream.on('finish', () => {
-        fileStream.close(() => {
-          resolve(tempFilePath);
-        });
+        fileStream.close(() => resolve(tempFilePath));
       });
       
       fileStream.on('error', (err) => {
@@ -58,26 +45,21 @@ async function downloadImageWithRedirects(url, maxRedirects = 3) {
       });
     });
     
-    request.on('error', (err) => {
-      reject(new Error(`下载请求错误: ${err.message}`));
-    });
+    request.on('error', (err) => reject(new Error(`下载请求错误: ${err.message}`)));
   });
 }
 
-// 步骤2：上传图片获取file_id
-async function uploadImage() {
-  // 使用会重定向的图片URL测试
-  const imageUrl = 'https://picsum.photos/800/450?random=' + Math.random();
-  const tempPath = await downloadImageWithRedirects(imageUrl);
-  
+// 2. 获取file_id（上传后立即删除临时消息，不单独保留图片）
+async function getFileId(tempFilePath) {
   const formData = new FormData();
   formData.append('chat_id', CHANNEL_ID);
-  formData.append('photo', fs.createReadStream(tempPath));
+  formData.append('photo', fs.createReadStream(tempFilePath));
+  formData.append('disable_notification', 'true'); // 静默上传，不通知成员
   
   return new Promise((resolve, reject) => {
     formData.getLength((err, length) => {
       if (err) { 
-        fs.unlink(tempPath, () => {});
+        fs.unlink(tempFilePath, () => {});
         reject(new Error(`表单错误: ${err.message}`));
         return;
       }
@@ -91,53 +73,50 @@ async function uploadImage() {
         let data = '';
         res.on('data', (chunk) => data += chunk);
         res.on('end', () => {
-          fs.unlink(tempPath, () => {});
+          fs.unlink(tempFilePath, () => {}); // 无论成功失败都清理临时文件
           
           try {
             const result = JSON.parse(data);
-            if (result.ok && result.result.photo && result.result.photo.length) {
-              const fileId = result.result.photo[result.result.photo.length - 1].file_id;
-              
-              // 删除临时消息
-              https.request({
-                hostname: 'api.telegram.org',
-                path: `/bot${TELEGRAM_BOT_TOKEN}/deleteMessage`,
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' }
-              }).end(JSON.stringify({
-                chat_id: CHANNEL_ID,
-                message_id: result.result.message_id
-              }));
-              
-              resolve(fileId);
-            } else {
-              reject(new Error(`上传图片失败: ${result.description || data}`));
+            if (!result.ok || !result.result?.photo?.length) {
+              reject(new Error(`获取file_id失败: ${result.description || data}`));
+              return;
             }
+            
+            // 立即删除临时上传的图片（核心：不保留单独发送的图片）
+            https.request({
+              hostname: 'api.telegram.org',
+              path: `/bot${TELEGRAM_BOT_TOKEN}/deleteMessage`,
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' }
+            }).end(JSON.stringify({
+              chat_id: CHANNEL_ID,
+              message_id: result.result.message_id
+            }));
+            
+            // 获取最高分辨率的file_id
+            resolve(result.result.photo[result.result.photo.length - 1].file_id);
           } catch (e) {
             reject(new Error(`解析响应失败: ${e.message}`));
           }
         });
       });
       
-      req.on('error', (err) => {
-        fs.unlink(tempPath, () => {});
-        reject(new Error(`上传请求错误: ${err.message}`));
-      });
-      
+      req.on('error', (err) => reject(new Error(`上传请求错误: ${err.message}`)));
       formData.pipe(req);
     });
   });
 }
 
-// 步骤3：发送媒体组
-async function sendMediaGroup() {
-  const fileId1 = await uploadImage();
-  const fileId2 = await uploadImage();
-  
-  const media = [
-    { type: 'photo', media: fileId1, caption: '成功处理重定向', parse_mode: 'HTML' },
-    { type: 'photo', media: fileId2 }
-  ];
+// 3. 发送媒体组（横向排布关键：使用宽屏图片比例）
+async function sendMediaGroup(fileIds, caption) {
+  // 构建媒体组参数（横向排布依赖图片本身宽高比16:9）
+  const media = fileIds.map((fileId, index) => ({
+    type: 'photo',
+    media: fileId,
+    // 只有第一张图片带标题
+    caption: index === 0 ? caption : undefined,
+    parse_mode: 'HTML'
+  }));
   
   const postData = JSON.stringify({
     chat_id: CHANNEL_ID,
@@ -167,22 +146,53 @@ async function sendMediaGroup() {
       });
     });
     
-    req.on('error', (err) => reject(err));
+    req.on('error', (err) => reject(new Error(`发送请求错误: ${err.message}`)));
     req.write(postData);
     req.end();
   });
 }
 
-// 主函数
+// 4. 主函数：整合流程
 module.exports = async function handler(req, res) {
-  res.setHeader('Cache-Control', 'no-store');
+  // 防缓存设置
+  res.setHeader('Cache-Control', 'no-store, no-cache');
   
+  // 环境变量检查
   if (!TELEGRAM_BOT_TOKEN || !CHANNEL_ID) {
     return res.status(500).json({ error: '缺少环境变量' });
   }
   
+  // 临时文件记录（确保最终能清理）
+  const tempFiles = [];
+  
   try {
-    const result = await sendMediaGroup();
+    // 自定义内容（这里替换成你的图片和文案）
+    const postContent = {
+      // 关键：使用16:9宽屏比例图片（800x450）确保横向排布
+      images: [
+        'https://picsum.photos/800/450?random=1', // 宽高比16:9
+        'https://picsum.photos/800/450?random=2'  // 宽高比16:9
+      ],
+      caption: '每日精选横向排布图片\n\n第一张：自然风景\n第二张：城市建筑\n\n#横向排布 #精选'
+    };
+    
+    // 下载所有图片
+    const imagePaths = await Promise.all(
+      postContent.images.map(async (url) => {
+        const path = await downloadImage(url);
+        tempFiles.push(path);
+        return path;
+      })
+    );
+    
+    // 获取所有file_id（上传后自动删除临时图片）
+    const fileIds = await Promise.all(
+      imagePaths.map(path => getFileId(path))
+    );
+    
+    // 只发送媒体组（不单独保留任何图片）
+    const result = await sendMediaGroup(fileIds, postContent.caption);
+    
     res.status(200).json({ success: true, result: result });
   } catch (error) {
     res.status(500).json({
@@ -190,6 +200,11 @@ module.exports = async function handler(req, res) {
       error: error.message,
       debug: { channelId: CHANNEL_ID, tokenSet: !!TELEGRAM_BOT_TOKEN }
     });
+  } finally {
+    // 确保所有临时文件被清理
+    for (const path of tempFiles) {
+      try { await fs.promises.unlink(path); } catch (e) {}
+    }
   }
 };
 
