@@ -1,14 +1,3 @@
-// 在 api/sendPost.js 最顶部添加
-process.removeAllListeners('warning');
-process.on('warning', (warning) => {
-  // 只忽略 util.isArray 的 deprecation 警告
-  if (warning.name === 'DeprecationWarning' && warning.message.includes('util.isArray')) {
-    return;
-  }
-  // 其他警告正常输出
-  console.warn(warning);
-});
-
 const { writeFile, unlink } = require('fs/promises');
 const { tmpdir } = require('os');
 const { join } = require('path');
@@ -24,20 +13,20 @@ const CHANNEL_ID = process.env.TELEGRAM_CHANNEL_ID;
 function getPostContent() {
   return {
     images: [
-      'https://picsum.photos/800/450?random=1', // 宽高比16:9，利于横向排布
+      'https://picsum.photos/800/450?random=1',
       'https://picsum.photos/800/450?random=2'
     ],
     caption: '每日精选图片\n\n第一张图片：美丽的自然风光\n第二张图片：城市建筑景观\n\n#每日分享 #图片'
   };
 }
 
-// 2. 下载图片（保留重定向处理）
+// 2. 下载图片
 async function downloadImage(url, maxRedirects = 3) {
   if (maxRedirects <= 0) throw new Error('超过最大重定向次数');
   
   const tmpFilePath = join(tmpdir(), 'temp-' + Date.now() + '.jpg');
   return new Promise(function(resolve, reject) {
-    https.get(url, function(response) {
+    const request = https.get(url, { timeout: 5000 }, function(response) {
       // 处理301/302重定向
       if (response.statusCode === 301 || response.statusCode === 302) {
         const redirectUrl = response.headers.location;
@@ -52,11 +41,13 @@ async function downloadImage(url, maxRedirects = 3) {
       response.pipe(file);
       file.on('finish', function() { file.close(function() { resolve(tmpFilePath); }); });
       file.on('error', function(err) { unlink(tmpFilePath).catch(() => {}); reject(err); });
-    }).on('error', reject);
+    });
+    request.on('timeout', () => { request.destroy(); reject(new Error('下载超时')); });
+    request.on('error', reject);
   });
 }
 
-// 3. 获取FileId（修复FormData发送方式）
+// 3. 获取FileId
 async function getFileId(filePath) {
   const formData = new FormData();
   formData.append('chat_id', CHANNEL_ID);
@@ -69,61 +60,109 @@ async function getFileId(filePath) {
       const headers = formData.getHeaders();
       headers['Content-Length'] = length;
       
-      // 创建请求
       const req = https.request({
         hostname: 'api.telegram.org',
         path: '/bot' + TELEGRAM_BOT_TOKEN + '/sendPhoto',
         method: 'POST',
-        headers: headers
+        headers: headers,
+        timeout: 5000
       }, function(res) {
         let data = '';
         res.on('data', function(chunk) { data += chunk; });
         res.on('end', function() {
-          const result = JSON.parse(data);
-          if (!result.ok) { reject(new Error('Telegram错误:' + result.description)); return; }
-          // 删除临时消息
-          https.request({
-            hostname: 'api.telegram.org',
-            path: '/bot' + TELEGRAM_BOT_TOKEN + '/deleteMessage',
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' }
-          }).end(JSON.stringify({
-            chat_id: CHANNEL_ID,
-            message_id: result.result.message_id
-          }));
-          resolve(result.result.photo[result.result.photo.length - 1].file_id);
+          try {
+            const result = JSON.parse(data);
+            if (!result.ok) { 
+              reject(new Error('Telegram错误:' + (result.description || '未知错误'))); 
+              return;
+            }
+            if (!result.result || !result.result.photo || !result.result.photo.length) {
+              reject(new Error('未获取到有效的图片file_id'));
+              return;
+            }
+            // 删除临时消息
+            https.request({
+              hostname: 'api.telegram.org',
+              path: '/bot' + TELEGRAM_BOT_TOKEN + '/deleteMessage',
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              timeout: 5000
+            }).end(JSON.stringify({
+              chat_id: CHANNEL_ID,
+              message_id: result.result.message_id
+            }));
+            resolve(result.result.photo[result.result.photo.length - 1].file_id);
+          } catch (e) {
+            reject(new Error('解析响应失败:' + e.message));
+          }
         });
-      }).on('error', reject);
-      
-      // 关键修复：使用pipe发送FormData，而不是end
+      });
+      req.on('timeout', () => { req.destroy(); reject(new Error('获取file_id超时')); });
+      req.on('error', reject);
       formData.pipe(req);
     });
   });
 }
 
-// 4. 发送媒体组
+// 4. 发送媒体组（修复核心错误：确保media参数正确生成）
 async function sendMediaGroup(fileIds, caption) {
-  const media = JSON.stringify([
-    { type: 'photo', media: fileIds[0], caption: caption, parse_mode: 'HTML' },
-    { type: 'photo', media: fileIds[1] }
-  ]);
+  // 验证fileIds是否有效
+  if (!fileIds || !Array.isArray(fileIds) || fileIds.length === 0) {
+    throw new Error('无效的fileIds数组，无法生成media参数');
+  }
+  
+  // 构建media数组（确保格式正确）
+  const media = fileIds.map((fileId, index) => ({
+    type: 'photo',
+    media: fileId,
+    // 只有第一个媒体添加标题
+    caption: index === 0 ? caption : undefined,
+    parse_mode: 'HTML'
+  }));
+  
+  // 验证media数组
+  if (!media || media.length === 0) {
+    throw new Error('media参数生成失败，为空数组');
+  }
+  
+  // 转换为JSON字符串（Telegram要求的格式）
+  const mediaJson = JSON.stringify(media);
+  
   return new Promise(function(resolve, reject) {
-    https.request({
+    const postData = JSON.stringify({
+      chat_id: CHANNEL_ID,
+      media: mediaJson  // 确保正确传递media参数
+    });
+    
+    const req = https.request({
       hostname: 'api.telegram.org',
       path: '/bot' + TELEGRAM_BOT_TOKEN + '/sendMediaGroup',
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Content-Length': Buffer.byteLength(media)
-      }
+        'Content-Length': Buffer.byteLength(postData)
+      },
+      timeout: 5000
     }, function(res) {
       let data = '';
       res.on('data', function(chunk) { data += chunk; });
       res.on('end', function() {
-        const result = JSON.parse(data);
-        result.ok ? resolve(result) : reject(new Error('媒体组错误:' + result.description));
+        try {
+          const result = JSON.parse(data);
+          if (!result.ok) {
+            reject(new Error('媒体组错误:' + (result.description || '未知错误')));
+            return;
+          }
+          resolve(result);
+        } catch (e) {
+          reject(new Error('解析媒体组响应失败:' + e.message));
+        }
       });
-    }).on('error', reject).end(media);
+    });
+    req.on('timeout', () => { req.destroy(); reject(new Error('发送媒体组超时')); });
+    req.on('error', reject);
+    req.write(postData);
+    req.end();
   });
 }
 
@@ -139,19 +178,33 @@ module.exports = async function handler(req, res) {
   let tempFiles = [];
   try {
     const content = getPostContent();
+    
+    // 验证图片列表
+    if (!content.images || !content.images.length) {
+      throw new Error('未配置图片URL列表');
+    }
+    
     // 下载图片
     const paths = await Promise.all(content.images.map(async (url) => {
       const path = await downloadImage(url);
       tempFiles.push(path);
       return path;
     }));
+    
     // 获取FileId
     const ids = await Promise.all(paths.map(path => getFileId(path)));
+    
+    // 验证fileIds
+    if (ids.length < 1) {
+      throw new Error('未获取到任何图片的file_id');
+    }
+    
     // 发送媒体组
     const result = await sendMediaGroup(ids, content.caption);
     
     res.status(200).json({ success: true, result: result });
   } catch (error) {
+    console.error('执行错误:', error);
     res.status(500).json({ success: false, error: error.message });
   } finally {
     // 清理临时文件
@@ -161,6 +214,5 @@ module.exports = async function handler(req, res) {
   }
 };
 
-// 运行时配置
 module.exports.config = { runtime: 'nodejs' };
     
