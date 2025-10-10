@@ -4,6 +4,8 @@ on:
   schedule:
     - cron: '0 2 * * *' # 每天凌晨2点（UTC）执行
   workflow_dispatch: # 手动触发
+  push:  # 新增：当 preview 分支有代码推送时自动触发（方便测试）
+    branches: [preview]
 
 jobs:
   fetch:
