@@ -1,29 +1,81 @@
 const https = require('https');
+const fs = require('fs');
+const { tmpdir } = require('os');
+const { join } = require('path');
+const FormData = require('form-data');
 
 // 环境变量
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const CHANNEL_ID = process.env.TELEGRAM_CHANNEL_ID;
 
-// 直接发送硬编码的媒体组（确保参数格式绝对正确）
-async function testSendMediaGroup() {
-  // 1. 这里使用Telegram官方示例中的测试图片file_id（确保有效）
-  const testFileIds = [
-    'AgACAgQAAxkBAAIBX2ZZ1J8Q5sRVVJ29cK8j74X1nTQAAJ2zMRvGb4hUbD8rLcBZ0qHAQADAgADeQADLwQ',
-    'AgACAgQAAxkBAAIBY2ZZ1LIA7eQZ4b61V64X1nTQAAJ2zMRvGb4hUbD8rLcBZ0qHAQADAgADeQADLwQ'
-  ];
+// 步骤1：先上传一张测试图片，获取有效的file_id（属于你的机器人）
+async function uploadTestImage() {
+  // 使用临时文件（内容是简单的图片二进制数据）
+  const tempFilePath = join(tmpdir(), 'test-image.jpg');
+  fs.writeFileSync(tempFilePath, Buffer.from([0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46])); // 最小JPEG头
   
-  // 2. 构建绝对正确的media参数
+  const formData = new FormData();
+  formData.append('chat_id', CHANNEL_ID);
+  formData.append('photo', fs.createReadStream(tempFilePath));
+  
+  return new Promise((resolve, reject) => {
+    formData.getLength((err, length) => {
+      if (err) { reject(err); return; }
+      
+      const req = https.request({
+        hostname: 'api.telegram.org',
+        path: `/bot${TELEGRAM_BOT_TOKEN}/sendPhoto`,
+        method: 'POST',
+        headers: { ...formData.getHeaders(), 'Content-Length': length }
+      }, (res) => {
+        let data = '';
+        res.on('data', (chunk) => data += chunk);
+        res.on('end', () => {
+          fs.unlinkSync(tempFilePath); // 清理临时文件
+          try {
+            const result = JSON.parse(data);
+            if (result.ok && result.result.photo && result.result.photo.length) {
+              // 获取有效的file_id
+              const fileId = result.result.photo[result.result.photo.length - 1].file_id;
+              console.log('获取到有效file_id:', fileId);
+              
+              // 删除临时消息
+              https.request({
+                hostname: 'api.telegram.org',
+                path: `/bot${TELEGRAM_BOT_TOKEN}/deleteMessage`,
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' }
+              }).end(JSON.stringify({
+                chat_id: CHANNEL_ID,
+                message_id: result.result.message_id
+              }));
+              
+              resolve(fileId);
+            } else {
+              reject(new Error(`上传图片失败: ${result.description || data}`));
+            }
+          } catch (e) {
+            reject(new Error(`解析响应失败: ${e.message}`));
+          }
+        });
+      });
+      
+      req.on('error', (err) => reject(err));
+      formData.pipe(req);
+    });
+  });
+}
+
+// 步骤2：使用自己的有效file_id发送媒体组
+async function sendValidMediaGroup() {
+  // 先上传图片获取有效file_id（确保属于当前机器人）
+  const fileId1 = await uploadTestImage();
+  const fileId2 = await uploadTestImage(); // 再获取一个
+  
+  // 构建媒体组（使用自己的file_id）
   const media = [
-    {
-      type: 'photo',
-      media: testFileIds[0],
-      caption: '测试媒体组',
-      parse_mode: 'HTML'
-    },
-    {
-      type: 'photo',
-      media: testFileIds[1]
-    }
+    { type: 'photo', media: fileId1, caption: '测试媒体组（有效file_id）', parse_mode: 'HTML' },
+    { type: 'photo', media: fileId2 }
   ];
   
   const postData = JSON.stringify({
@@ -47,14 +99,14 @@ async function testSendMediaGroup() {
         try {
           const result = JSON.parse(data);
           if (result.ok) resolve(result);
-          else reject(new Error(`API错误: ${result.description || data}`));
+          else reject(new Error(`媒体组错误: ${result.description || data}`));
         } catch (e) {
-          reject(new Error(`解析错误: ${e.message}, 原始响应: ${data}`));
+          reject(new Error(`解析错误: ${e.message}`));
         }
       });
     });
     
-    req.on('error', (err) => reject(new Error(`请求失败: ${err.message}`)));
+    req.on('error', (err) => reject(err));
     req.write(postData);
     req.end();
   });
@@ -62,32 +114,20 @@ async function testSendMediaGroup() {
 
 // 主函数
 module.exports = async function handler(req, res) {
-  // 基本环境检查
-  if (!TELEGRAM_BOT_TOKEN) {
-    return res.status(500).json({ error: '缺少TELEGRAM_BOT_TOKEN' });
-  }
-  if (!CHANNEL_ID) {
-    return res.status(500).json({ error: '缺少CHANNEL_ID' });
+  res.setHeader('Cache-Control', 'no-store');
+  
+  if (!TELEGRAM_BOT_TOKEN || !CHANNEL_ID) {
+    return res.status(500).json({ error: '缺少环境变量' });
   }
   
   try {
-    // 直接发送测试媒体组
-    const result = await testSendMediaGroup();
-    res.status(200).json({
-      success: true,
-      message: '媒体组发送成功',
-      result: result
-    });
+    const result = await sendValidMediaGroup();
+    res.status(200).json({ success: true, result: result });
   } catch (error) {
     res.status(500).json({
       success: false,
       error: error.message,
-      // 附加调试信息
-      debug: {
-        channelId: CHANNEL_ID,
-        tokenSet: !!TELEGRAM_BOT_TOKEN,
-        timestamp: new Date().toISOString()
-      }
+      debug: { channelId: CHANNEL_ID, tokenSet: !!TELEGRAM_BOT_TOKEN }
     });
   }
 };
