@@ -7,7 +7,7 @@ const moment = require('moment');
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
 const TARGET_REPO = 'liyupi/awesome-websites'; // 临时用的目标仓库，可替换
 const TARGET_FILE_PATH = 'README.md';
-const MY_REPO = '你的GitHub用户名/你的项目仓库'; // 替换为你的仓库
+const MY_REPO = 'wyzbuss/tg-bot-publisher'; // 替换为你的仓库
 const DATA_DIR = 'data/websites';
 const CONFIG_FILE_PATH = 'data/config.json';
 
