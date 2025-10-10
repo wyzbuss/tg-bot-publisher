@@ -1,212 +1,350 @@
-const https = require('https');
-const fs = require('fs');
-const { tmpdir } = require('os');
-const { join } = require('path');
-const FormData = require('form-data');
+const { Octokit } = require('@octokit/rest');
+const puppeteer = require('puppeteer-core');
+const moment = require('moment');
 
-// 环境变量
+// 环境变量配置
+const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
-const CHANNEL_ID = process.env.TELEGRAM_CHANNEL_ID;
+const TELEGRAM_CHANNEL_ID = process.env.TELEGRAM_CHANNEL_ID;
+const MY_REPO = 'wyzbuss/tg-bot-publisher';
+const BRANCH = 'preview';
 
-// 1. 下载图片（支持重定向，确保能获取图片）
-async function downloadImage(url, maxRedirects = 3) {
-  if (maxRedirects <= 0) throw new Error('超过最大重定向次数');
+// 初始化GitHub客户端
+const octokit = new Octokit({ auth: GITHUB_TOKEN });
 
-  const tempFilePath = join(tmpdir(), `img-${Date.now()}.jpg`);
+// 主函数 - Vercel云函数入口
+module.exports = async (req, res) => {
+  res.setHeader('Content-Type', 'application/json');
   
-  return new Promise((resolve, reject) => {
-    const request = https.get(url, (res) => {
-      // 处理重定向
-      if (res.statusCode === 301 || res.statusCode === 302) {
-        const redirectUrl = res.headers.location;
-        if (!redirectUrl) { reject(new Error('无重定向URL')); return; }
-        res.resume();
-        downloadImage(redirectUrl, maxRedirects - 1).then(resolve).catch(reject);
-        return;
+  // 验证环境变量
+  if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHANNEL_ID || !GITHUB_TOKEN) {
+    return res.status(500).json({
+      success: false,
+      error: '缺少环境变量',
+      debug: {
+        token: !!TELEGRAM_BOT_TOKEN,
+        channelId: !!TELEGRAM_CHANNEL_ID,
+        githubToken: !!GITHUB_TOKEN
       }
-      
-      // 验证有效响应
-      if (res.statusCode !== 200) { 
-        reject(new Error(`下载失败，状态码: ${res.statusCode}`)); 
-        return;
-      }
-      
-      // 保存图片到临时文件
-      const fileStream = fs.createWriteStream(tempFilePath);
-      res.pipe(fileStream);
-      
-      fileStream.on('finish', () => {
-        fileStream.close(() => resolve(tempFilePath));
-      });
-      
-      fileStream.on('error', (err) => {
-        fs.unlink(tempFilePath, () => {});
-        reject(new Error(`文件写入错误: ${err.message}`));
-      });
     });
-    
-    request.on('error', (err) => reject(new Error(`下载请求错误: ${err.message}`)));
-  });
-}
-
-// 2. 获取file_id（上传后立即删除临时消息，不单独保留图片）
-async function getFileId(tempFilePath) {
-  const formData = new FormData();
-  formData.append('chat_id', CHANNEL_ID);
-  formData.append('photo', fs.createReadStream(tempFilePath));
-  formData.append('disable_notification', 'true'); // 静默上传，不通知成员
-  
-  return new Promise((resolve, reject) => {
-    formData.getLength((err, length) => {
-      if (err) { 
-        fs.unlink(tempFilePath, () => {});
-        reject(new Error(`表单错误: ${err.message}`));
-        return;
-      }
-      
-      const req = https.request({
-        hostname: 'api.telegram.org',
-        path: `/bot${TELEGRAM_BOT_TOKEN}/sendPhoto`,
-        method: 'POST',
-        headers: { ...formData.getHeaders(), 'Content-Length': length }
-      }, (res) => {
-        let data = '';
-        res.on('data', (chunk) => data += chunk);
-        res.on('end', () => {
-          fs.unlink(tempFilePath, () => {}); // 无论成功失败都清理临时文件
-          
-          try {
-            const result = JSON.parse(data);
-            if (!result.ok || !result.result?.photo?.length) {
-              reject(new Error(`获取file_id失败: ${result.description || data}`));
-              return;
-            }
-            
-            // 立即删除临时上传的图片（核心：不保留单独发送的图片）
-            https.request({
-              hostname: 'api.telegram.org',
-              path: `/bot${TELEGRAM_BOT_TOKEN}/deleteMessage`,
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' }
-            }).end(JSON.stringify({
-              chat_id: CHANNEL_ID,
-              message_id: result.result.message_id
-            }));
-            
-            // 获取最高分辨率的file_id
-            resolve(result.result.photo[result.result.photo.length - 1].file_id);
-          } catch (e) {
-            reject(new Error(`解析响应失败: ${e.message}`));
-          }
-        });
-      });
-      
-      req.on('error', (err) => reject(new Error(`上传请求错误: ${err.message}`)));
-      formData.pipe(req);
-    });
-  });
-}
-
-// 3. 发送媒体组（横向排布关键：使用宽屏图片比例）
-async function sendMediaGroup(fileIds, caption) {
-  // 构建媒体组参数（横向排布依赖图片本身宽高比16:9）
-  const media = fileIds.map((fileId, index) => ({
-    type: 'photo',
-    media: fileId,
-    // 只有第一张图片带标题
-    caption: index === 0 ? caption : undefined,
-    parse_mode: 'HTML'
-  }));
-  
-  const postData = JSON.stringify({
-    chat_id: CHANNEL_ID,
-    media: JSON.stringify(media)
-  });
-  
-  return new Promise((resolve, reject) => {
-    const req = https.request({
-      hostname: 'api.telegram.org',
-      path: `/bot${TELEGRAM_BOT_TOKEN}/sendMediaGroup`,
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Content-Length': Buffer.byteLength(postData)
-      }
-    }, (res) => {
-      let data = '';
-      res.on('data', (chunk) => data += chunk);
-      res.on('end', () => {
-        try {
-          const result = JSON.parse(data);
-          if (result.ok) resolve(result);
-          else reject(new Error(`媒体组错误: ${result.description || data}`));
-        } catch (e) {
-          reject(new Error(`解析错误: ${e.message}`));
-        }
-      });
-    });
-    
-    req.on('error', (err) => reject(new Error(`发送请求错误: ${err.message}`)));
-    req.write(postData);
-    req.end();
-  });
-}
-
-// 4. 主函数：整合流程
-module.exports = async function handler(req, res) {
-  // 防缓存设置
-  res.setHeader('Cache-Control', 'no-store, no-cache');
-  
-  // 环境变量检查
-  if (!TELEGRAM_BOT_TOKEN || !CHANNEL_ID) {
-    return res.status(500).json({ error: '缺少环境变量' });
   }
-  
-  // 临时文件记录（确保最终能清理）
-  const tempFiles = [];
-  
+
   try {
-    // 自定义内容（这里替换成你的图片和文案）
-    const postContent = {
-      // 关键：使用16:9宽屏比例图片（800x450）确保横向排布
-      images: [
-        'https://picsum.photos/800/450?random=1', // 宽高比16:9
-        'https://picsum.photos/800/450?random=2'  // 宽高比16:9
-      ],
-      caption: '每日精选横向排布图片\n\n第一张：自然风景\n第二张：城市建筑\n\n#横向排布 #精选'
-    };
-    
-    // 下载所有图片
-    const imagePaths = await Promise.all(
-      postContent.images.map(async (url) => {
-        const path = await downloadImage(url);
-        tempFiles.push(path);
-        return path;
-      })
-    );
-    
-    // 获取所有file_id（上传后自动删除临时图片）
-    const fileIds = await Promise.all(
-      imagePaths.map(path => getFileId(path))
-    );
-    
-    // 只发送媒体组（不单独保留任何图片）
-    const result = await sendMediaGroup(fileIds, postContent.caption);
-    
-    res.status(200).json({ success: true, result: result });
+    // 1. 获取待发布网站
+    const { site, monthFilePath } = await getPendingWebsite();
+    if (!site) {
+      return res.status(200).json({
+        success: true,
+        message: '无待发布网站'
+      });
+    }
+
+    // 2. 识别链接类型并获取元数据
+    const linkType = getLinkType(site.url);
+    const meta = linkType === 'github' 
+      ? await getGithubRepoMeta(site.url) 
+      : { title: site.name, description: site.description, url: site.url };
+
+    // 3. 自动截图
+    const screenshots = await takeScreenshots(site.url, linkType);
+
+    // 4. 发送到Telegram
+    await sendToTelegram(meta, screenshots, linkType);
+
+    // 5. 更新网站状态为已发布
+    await updateSiteStatus(site, monthFilePath);
+
+    // 6. 更新配置文件
+    await updateConfigFile();
+
+    res.status(200).json({
+      success: true,
+      published: meta.title,
+      url: meta.url
+    });
   } catch (error) {
+    console.error('发布失败:', error);
     res.status(500).json({
       success: false,
       error: error.message,
-      debug: { channelId: CHANNEL_ID, tokenSet: !!TELEGRAM_BOT_TOKEN }
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
     });
-  } finally {
-    // 确保所有临时文件被清理
-    for (const path of tempFiles) {
-      try { await fs.promises.unlink(path); } catch (e) {}
-    }
   }
 };
 
-module.exports.config = { runtime: 'nodejs' };
+// 链接类型识别
+function getLinkType(url) {
+  const githubRegex = /^https?:\/\/github\.com\/([^\/]+)\/([^\/]+)(#.*)?$/;
+  return githubRegex.test(url) ? 'github' : 'normal';
+}
+
+// 获取GitHub仓库元数据
+async function getGithubRepoMeta(url) {
+  try {
+    const match = url.match(/^https?:\/\/github\.com\/([^\/]+)\/([^\/]+)/);
+    if (!match) throw new Error('无效的GitHub链接');
+
+    const [, owner, repo] = match;
+    const response = await octokit.repos.get({ owner, repo });
+    const { stargazers_count: stars, description, language, html_url } = response.data;
+
+    return {
+      title: `${owner}/${repo}`,
+      description: description || 'GitHub开源仓库',
+      stars: stars ? `${stars.toLocaleString()} ⭐` : '未知',
+      language: language || '未知',
+      url: html_url
+    };
+  } catch (error) {
+    console.warn('GitHub元数据获取失败，使用基础信息:', error.message);
+    return {
+      title: url.split('/').slice(-2).join('/'),
+      description: 'GitHub开源仓库',
+      url: url
+    };
+  }
+}
+
+// 差异化截图
+async function takeScreenshots(url, linkType) {
+  const browser = await puppeteer.launch({
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-gpu'
+    ],
+    executablePath: process.env.CHROME_EXECUTABLE_PATH || '/usr/bin/chromium-browser',
+    headless: 'new',
+    timeout: 30000
+  });
+
+  const page = await browser.newPage();
+  await page.setViewport({ width: 1280, height: 720 });
+  await page.setDefaultNavigationTimeout(30000);
+
+  try {
+    await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
+
+    // GitHub仓库截图策略
+    if (linkType === 'github') {
+      // 截图1：仓库首页
+      const screenshot1 = await page.screenshot({ encoding: 'base64' });
+      
+      // 滚动到README区域截图
+      await page.evaluate(() => {
+        const readme = document.querySelector('#readme');
+        if (readme) readme.scrollIntoView({ behavior: 'smooth' });
+      });
+      await page.waitForTimeout(1000);
+      const screenshot2 = await page.screenshot({ encoding: 'base64' });
+      
+      return [screenshot1, screenshot2];
+    }
+
+    // 普通网站截图策略
+    // 尝试跳过登录页
+    await page.evaluate(() => {
+      const skipTexts = ['游客', '跳过', '取消', '稍后', '关闭'];
+      skipTexts.forEach(text => {
+        const buttons = document.querySelectorAll(`button:contains('${text}'), a:contains('${text}')`);
+        buttons.forEach(btn => btn.click());
+      });
+    });
+    await page.waitForTimeout(2000);
+
+    // 截图1：网站首页
+    const screenshot1 = await page.screenshot({ encoding: 'base64' });
     
+    // 滚动到内容区域截图
+    await page.evaluate(() => {
+      const contentAreas = ['main', '#content', '.container', '.main-content'];
+      contentAreas.forEach(selector => {
+        const el = document.querySelector(selector);
+        if (el) el.scrollIntoView({ behavior: 'smooth' });
+      });
+    });
+    await page.waitForTimeout(1000);
+    const screenshot2 = await page.screenshot({ encoding: 'base64' });
+    
+    return [screenshot1, screenshot2];
+  } catch (error) {
+    console.error('截图失败:', error.message);
+    // 提供默认图片（需自行准备并替换为你的图片URL）
+    const defaultScreenshot = await fetch('https://picsum.photos/1280/720?random=1')
+      .then(res => res.buffer())
+      .then(buf => buf.toString('base64'));
+    return [defaultScreenshot, defaultScreenshot];
+  } finally {
+    await browser.close();
+  }
+}
+
+// 发送到Telegram
+async function sendToTelegram(meta, screenshots, linkType) {
+  // 上传截图获取file_id
+  const fileIds = [];
+  for (const screenshot of screenshots) {
+    const formData = new FormData();
+    formData.append('chat_id', TELEGRAM_CHANNEL_ID);
+    formData.append('photo', Buffer.from(screenshot, 'base64'), 'screenshot.png');
+    
+    const uploadResponse = await fetch(
+      `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendPhoto`,
+      { method: 'POST', body: formData }
+    );
+    
+    const result = await uploadResponse.json();
+    if (!result.ok) throw new Error(`上传截图失败: ${result.description}`);
+    fileIds.push(result.result.photo[0].file_id);
+  }
+
+  // 生成文案
+  let caption;
+  if (linkType === 'github') {
+    caption = `**🔧 ${meta.title}**\n` +
+             `${meta.stars} | ${meta.language}\n\n` +
+             `${meta.description}\n\n` +
+             `[访问仓库](${meta.url})\n\n` +
+             `#GitHub #开源 #${meta.language || '工具'}`;
+  } else {
+    caption = `**🌟 ${meta.title}**\n\n` +
+             `${meta.description}\n\n` +
+             `[立即访问](${meta.url})\n\n` +
+             `#实用工具 #网站推荐`;
+  }
+
+  // 发送媒体组
+  const mediaGroupResponse = await fetch(
+    `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMediaGroup`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: TELEGRAM_CHANNEL_ID,
+        media: [
+          { type: 'photo', media: fileIds[0], caption: caption, parse_mode: 'Markdown' },
+          { type: 'photo', media: fileIds[1] }
+        ]
+      })
+    }
+  );
+
+  const mediaResult = await mediaGroupResponse.json();
+  if (!mediaResult.ok) throw new Error(`发送失败: ${mediaResult.description}`);
+}
+
+// 获取待发布网站
+async function getPendingWebsite() {
+  // 读取配置文件获取当前待发布文件
+  const config = await fetchFileFromRepo('data/config.json') || {
+    currentPendingFile: moment().format('YYYY-MM') + '.json'
+  };
+  
+  const monthFilePath = `data/websites/${config.currentPendingFile}`;
+  const websites = await fetchFileFromRepo(monthFilePath) || [];
+  
+  // 查找第一个待发布网站
+  const pendingSite = websites.find(site => site.status === 'pending');
+  
+  return { site: pendingSite, monthFilePath };
+}
+
+// 从仓库读取文件
+async function fetchFileFromRepo(filePath) {
+  try {
+    const response = await octokit.repos.getContent({
+      owner: MY_REPO.split('/')[0],
+      repo: MY_REPO.split('/')[1],
+      path: filePath,
+      ref: BRANCH,
+      mediaType: { format: 'raw' }
+    });
+    return response.data ? JSON.parse(response.data) : null;
+  } catch (error) {
+    if (error.status === 404) return null;
+    throw new Error(`读取文件失败: ${filePath} - ${error.message}`);
+  }
+}
+
+// 更新网站状态为已发布
+async function updateSiteStatus(site, monthFilePath) {
+  const websites = await fetchFileFromRepo(monthFilePath) || [];
+  const updatedWebsites = websites.map(s => 
+    s.id === site.id 
+      ? { ...s, status: 'published', publishedAt: moment().toISOString() }
+      : s
+  );
+
+  // 获取当前文件SHA
+  const fileInfo = await octokit.repos.getContent({
+    owner: MY_REPO.split('/')[0],
+    repo: MY_REPO.split('/')[1],
+    path: monthFilePath,
+    ref: BRANCH
+  });
+
+  // 提交更新
+  await octokit.repos.createOrUpdateFileContents({
+    owner: MY_REPO.split('/')[0],
+    repo: MY_REPO.split('/')[1],
+    path: monthFilePath,
+    message: `Mark ${site.id} as published`,
+    content: Buffer.from(JSON.stringify(updatedWebsites, null, 2)).toString('base64'),
+    branch: BRANCH,
+    sha: fileInfo.data.sha
+  });
+}
+
+// 更新配置文件
+async function updateConfigFile() {
+  const config = await fetchFileFromRepo('data/config.json') || {
+    currentPendingFile: moment().format('YYYY-MM') + '.json',
+    totalPublished: 0
+  };
+
+  // 统计已发布数量
+  const monthFiles = await octokit.repos.getContent({
+    owner: MY_REPO.split('/')[0],
+    repo: MY_REPO.split('/')[1],
+    path: 'data/websites',
+    ref: BRANCH
+  });
+
+  let totalPublished = 0;
+  for (const file of monthFiles.data) {
+    if (file.type === 'file' && file.name.endsWith('.json')) {
+      const sites = await fetchFileFromRepo(`data/websites/${file.name}`) || [];
+      totalPublished += sites.filter(s => s.status === 'published').length;
+    }
+  }
+
+  config.totalPublished = totalPublished;
+  config.lastPublishedAt = moment().toISOString();
+
+  // 提交配置更新
+  const configFileInfo = await octokit.repos.getContent({
+    owner: MY_REPO.split('/')[0],
+    repo: MY_REPO.split('/')[1],
+    path: 'data/config.json',
+    ref: BRANCH
+  });
+
+  await octokit.repos.createOrUpdateFileContents({
+    owner: MY_REPO.split('/')[0],
+    repo: MY_REPO.split('/')[1],
+    path: 'data/config.json',
+    message: 'Update published stats',
+    content: Buffer.from(JSON.stringify(config, null, 2)).toString('base64'),
+    branch: BRANCH,
+    sha: configFileInfo.data.sha
+  });
+}
+
+// 配置Vercel运行时
+module.exports.config = {
+  runtime: 'nodejs',
+  regions: ['iad1'], // 选择离你近的区域
+  memory: 1024, // 截图需要较多内存，设置为1GB
+  maxDuration: 60 // 最大运行时间60秒
+};
