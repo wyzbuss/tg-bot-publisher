@@ -75,7 +75,7 @@ module.exports = async function handler(req, res) {
     const result = await testSendMediaGroup();
     res.status(200).json({
       success: true,
-      message: '媒体组发送成功',
+      message: '媒体组发送成功333',
       result: result
     });
   } catch (error) {
