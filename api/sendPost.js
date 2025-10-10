@@ -6,7 +6,7 @@ const FormData = require('form-data');
 
 // 环境变量
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
-const CHANNEL_ID = process.env.CHANNEL_ID;
+const CHANNEL_ID = process.env.TELEGRAM_CHANNEL_ID;
 
 // 1. 下载图片（支持重定向，确保能获取图片）
 async function downloadImage(url, maxRedirects = 3) {
