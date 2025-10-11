@@ -1,5 +1,5 @@
 const { Octokit } = require('@octokit/rest');
-const puppeteer = require('vercel-puppeteer'); 
+const puppeteer = require('puppeteer'); 
 const moment = require('moment');
 const FormData = require('form-data'); // 确保FormData依赖正确引入
 const fetch = require('node-fetch');
@@ -160,63 +160,64 @@ async function getGithubRepoMeta(url) {
 async function takeScreenshots(url, linkType) {
   let browser;
   try {
-    // 关键修改：使用 vercel-puppeteer 启动，自带适配Vercel的Chrome，无需额外配置
-    browser = await puppeteer.launch();
+    // 关键：使用 Vercel 预装的 Chrome 路径，不用手动安装
+    const chromePath = '/opt/render/project/src/node_modules/puppeteer/.local-chromium/linux-127.0.6533.88/chrome-linux/chrome';
+    
+    // Puppeteer 配置（适配 Vercel，指定已存在的 Chrome 路径）
+    browser = await puppeteer.launch({
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-gpu'
+      ],
+      executablePath: chromePath, // 直接用预装路径，解决“找不到 Chrome”
+      headless: 'new',
+      timeout: 60000 // 延长超时，确保加载完成
+    });
 
     const page = await browser.newPage();
-    // 模拟正常浏览器环境，避免被识别为爬虫（保留原逻辑）
+    // 模拟正常浏览器环境
     await page.setViewport({ width: 1280, height: 720 });
-    await page.setDefaultNavigationTimeout(60000); // 延长超时到60秒，应对GitHub慢加载
+    await page.setDefaultNavigationTimeout(60000);
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0.0.0 Safari/537.36');
 
     console.log(`访问链接：${url}`);
     await page.goto(url, { waitUntil: 'networkidle2', timeout: 60000 });
 
-    // GitHub仓库截图策略（完全保留你的原逻辑）
+    // GitHub 仓库截图策略（保留你的原逻辑）
     if (linkType === 'github') {
-      // 截图1：仓库首页（含星数、描述栏）
       const screenshot1 = await page.screenshot({ encoding: 'base64' });
       
-      // 滚动到README区域（容错：没找到#readme则滚动到页面中间）
       await page.evaluate(() => {
         const readme = document.querySelector('#readme');
-        if (readme) {
-          readme.scrollIntoView({ behavior: 'smooth' });
-        } else {
-          window.scrollTo(0, document.body.scrollHeight / 2);
-        }
+        if (readme) readme.scrollIntoView({ behavior: 'smooth' });
+        else window.scrollTo(0, document.body.scrollHeight / 2);
       });
-      await page.waitForTimeout(1500); // 等待滚动和渲染完成
+      await page.waitForTimeout(1500);
       const screenshot2 = await page.screenshot({ encoding: 'base64' });
       
       return [screenshot1, screenshot2];
     }
 
-    // 普通网站截图策略（完全保留你的原逻辑，含弹窗处理和尺寸限制）
+    // 普通网站截图策略（保留你的原逻辑）
     if (linkType === 'normal') {
-      // 尝试跳过登录/弹窗（兼容中英文按钮）
       await page.evaluate(() => {
         const skipTexts = ['游客', '跳过', '取消', '稍后', '关闭', 'Guest', 'Skip', 'Cancel', 'Close'];
         skipTexts.forEach(text => {
-          const buttons = document.querySelectorAll(
-            `button:contains('${text}'), a:contains('${text}'), .btn:contains('${text}')`
-          );
-          buttons.forEach(btn => {
-            if (!btn.disabled && btn.offsetParent !== null) btn.click();
-          });
+          const buttons = document.querySelectorAll(`button:contains('${text}'), a:contains('${text}'), .btn:contains('${text}')`);
+          buttons.forEach(btn => btn.disabled || btn.offsetParent === null || btn.click());
         });
       });
-      await page.waitForTimeout(2000); // 等待弹窗关闭
+      await page.waitForTimeout(2000);
 
-      // 截图1：网站首页（保留尺寸限制）
       const screenshot1 = await page.screenshot({ encoding: 'base64', maxWidth: 1280, maxHeight: 720 });
       
-      // 滚动到核心内容区域（优先main、content等标签）
       await page.evaluate(() => {
         const contentAreas = ['main', '#content', '.container', '.main-content', '.content'];
         for (const selector of contentAreas) {
           const el = document.querySelector(selector);
-          if (el && el.offsetHeight > 300) { // 确保区域有足够内容
+          if (el && el.offsetHeight > 300) {
             el.scrollIntoView({ behavior: 'smooth' });
             break;
           }
@@ -229,7 +230,7 @@ async function takeScreenshots(url, linkType) {
     }
   } catch (error) {
     console.error('截图失败:', error.message);
-    // 降级：使用默认图片（保留你的原逻辑，确保不中断流程）
+    // 降级逻辑（保留你的原逻辑）
     try {
       console.log('使用默认截图替代，请求占位图');
       const defaultRes = await fetch('https://picsum.photos/1280/720?random=1');
@@ -241,7 +242,6 @@ async function takeScreenshots(url, linkType) {
       return [defaultBase64, defaultBase64];
     } catch (defaultErr) {
       console.error('默认截图获取失败:', defaultErr.message);
-      // 极端情况：返回1x1透明图
       const emptyImgBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
       return [emptyImgBase64, emptyImgBase64];
     }
