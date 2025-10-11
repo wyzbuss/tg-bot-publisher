@@ -1,5 +1,5 @@
 const { Octokit } = require('@octokit/rest');
-const puppeteer = require('puppeteer-core');
+const puppeteer = require('puppeteer');
 const moment = require('moment');
 const FormData = require('form-data'); // 确保FormData依赖正确引入
 const fetch = require('node-fetch');
