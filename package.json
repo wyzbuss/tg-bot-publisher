@@ -7,6 +7,9 @@
     "start": "vercel dev",
     "postinstall": "puppeteer browsers install chrome@127.0.6533.88"
   },
+  "puppeteer": {
+    "cacheDirectory": "./node_modules/puppeteer/.cache" // 指定到项目内的缓存目录
+  },
   "dependencies": {
     "fast-xml-parser": "^4.3.5",
     "node-html-parser": "^6.1.12",
