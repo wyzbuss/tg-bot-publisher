@@ -1,5 +1,6 @@
 const { Octokit } = require('@octokit/rest');
-const puppeteer = require('puppeteer'); 
+const puppeteer = require('puppeteer-core');
+const chromium = require('@sparticuz/chromium'); 
 const moment = require('moment');
 const FormData = require('form-data'); // 确保FormData依赖正确引入
 const fetch = require('node-fetch');
@@ -157,35 +158,30 @@ async function getGithubRepoMeta(url) {
  * @param {string} linkType - 链接类型（github/normal）
  * @returns {string[]} - 2张截图的Base64编码
  */
+
 async function takeScreenshots(url, linkType) {
   let browser;
   try {
-    // 关键：使用 Vercel 预装的 Chrome 路径，不用手动安装
-    const chromePath = '/opt/render/project/src/node_modules/puppeteer/.local-chromium/linux-127.0.6533.88/chrome-linux/chrome';
-    
-    // Puppeteer 配置（适配 Vercel，指定已存在的 Chrome 路径）
+    // 关键：用 @sparticuz/chromium 提供的 Chrome 路径和参数，100% 适配 Vercel
     browser = await puppeteer.launch({
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-gpu'
-      ],
-      executablePath: chromePath, // 直接用预装路径，解决“找不到 Chrome”
-      headless: 'new',
-      timeout: 60000 // 延长超时，确保加载完成
+      args: [...chromium.args, '--hide-scrollbars', '--disable-web-security'],
+      defaultViewport: chromium.defaultViewport,
+      executablePath: await chromium.executablePath(), // 自动获取正确路径
+      headless: chromium.headless,
+      ignoreHTTPSErrors: true,
+      timeout: 60000
     });
 
     const page = await browser.newPage();
     // 模拟正常浏览器环境
     await page.setViewport({ width: 1280, height: 720 });
     await page.setDefaultNavigationTimeout(60000);
-    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0.0.0 Safari/537.36');
+    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/127.0.0.0 Safari/537.36');
 
     console.log(`访问链接：${url}`);
     await page.goto(url, { waitUntil: 'networkidle2', timeout: 60000 });
 
-    // GitHub 仓库截图策略（保留你的原逻辑）
+    // GitHub 仓库截图策略（完全保留你的逻辑）
     if (linkType === 'github') {
       const screenshot1 = await page.screenshot({ encoding: 'base64' });
       
@@ -200,7 +196,7 @@ async function takeScreenshots(url, linkType) {
       return [screenshot1, screenshot2];
     }
 
-    // 普通网站截图策略（保留你的原逻辑）
+    // 普通网站截图策略（完全保留你的逻辑）
     if (linkType === 'normal') {
       await page.evaluate(() => {
         const skipTexts = ['游客', '跳过', '取消', '稍后', '关闭', 'Guest', 'Skip', 'Cancel', 'Close'];
