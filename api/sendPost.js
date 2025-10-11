@@ -219,7 +219,7 @@ async function takeScreenshots(url, linkType) {
       await page.waitForTimeout(2000); // 等待弹窗关闭
 
       // 截图1：网站首页
-      const screenshot1 = await page.screenshot({ encoding: 'base64' });
+      const screenshot1 = await page.screenshot({ encoding: 'base64', maxWidth: 1280,  maxHeight: 720});
       
       // 滚动到核心内容区域（优先main、content等标签）
       await page.evaluate(() => {
@@ -233,7 +233,7 @@ async function takeScreenshots(url, linkType) {
         }
       });
       await page.waitForTimeout(1500);
-      const screenshot2 = await page.screenshot({ encoding: 'base64' });
+      const screenshot2 = await page.screenshot({ encoding: 'base64', maxWidth: 1280,  maxHeight: 720 });
       
       return [screenshot1, screenshot2];
     }
@@ -242,7 +242,8 @@ async function takeScreenshots(url, linkType) {
     // 降级：使用默认图片（避免发送空截图）
     try {
       console.log('使用默认截图替代，请求占位图');
-      const defaultRes = await fetch('https://placehold.co/1280x720/EEEEEE/333333?text=Tool+Screenshot&font=arial');
+      // 在 takeScreenshots 的降级逻辑中
+      const defaultRes = await fetch('https://picsum.photos/1280/720?random=1');
       if (!defaultRes.ok) throw new Error(`默认截图请求失败，状态码：${defaultRes.status}`);
       
       const defaultBuf = await defaultRes.buffer();
@@ -277,6 +278,11 @@ async function sendToTelegram(meta, screenshots, linkType) {
   // 第一步：上传截图，获取Telegram的file_id
   const fileIds = [];
   for (let i = 0; i < validScreenshots.length; i++) {
+    const base64 = validScreenshots[i];
+    // 简单验证：Base64 长度至少 100 字节（排除空图）
+    if (base64.length < 100) {
+      throw new Error(`截图 ${i+1} 无效，Base64 内容过短`);
+    }
     console.log(`上传第${i+1}张截图`);
     const formData = new FormData();
     formData.append('chat_id', TELEGRAM_CHANNEL_ID);
