@@ -2,6 +2,7 @@ const { Octokit } = require('@octokit/rest');
 const puppeteer = require('puppeteer-core');
 const moment = require('moment');
 const FormData = require('form-data'); // 确保FormData依赖正确引入
+const fetch = require('node-fetch');
 
 // 环境变量配置
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
@@ -121,8 +122,9 @@ function getLinkType(url) {
  */
 async function getGithubRepoMeta(url) {
   try {
+    const cleanUrl = url.split('#')[0];
     // 从链接中提取owner和repo名称（兼容带#readme的链接）
-    const match = url.match(/^https?:\/\/github\.com\/([^\/]+)\/([^\/]+)/);
+    const match = cleanUrl.match(/^https?:\/\/github\.com\/([^\/]+)\/([^\/]+)/);
     if (!match) throw new Error('无效的GitHub链接格式');
 
     const [, owner, repo] = match;
@@ -167,7 +169,6 @@ async function takeScreenshots(url, linkType) {
         '--disable-gpu',
         '--remote-debugging-port=9222' // 提升稳定性
       ],
-      executablePath: process.env.CHROME_EXECUTABLE_PATH || '/usr/bin/chromium-browser',
       headless: 'new', // 最新无头模式，资源占用更低
       timeout: 40000 // 延长超时时间，应对慢加载网站
     });
@@ -240,14 +241,19 @@ async function takeScreenshots(url, linkType) {
     console.error('截图失败:', error.message);
     // 降级：使用默认图片（避免发送空截图）
     try {
-      console.log('使用默认截图替代');
-      const defaultRes = await fetch('https://picsum.photos/1280/720?random=1');
+      console.log('使用默认截图替代，请求占位图');
+      const defaultRes = await fetch('https://placehold.co/1280x720/EEEEEE/333333?text=Tool+Screenshot&font=arial');
+      if (!defaultRes.ok) throw new Error(`默认截图请求失败，状态码：${defaultRes.status}`);
+      
       const defaultBuf = await defaultRes.buffer();
       const defaultBase64 = defaultBuf.toString('base64');
+      console.log(`默认截图生成成功，大小：${defaultBuf.length} 字节`);
       return [defaultBase64, defaultBase64];
     } catch (defaultErr) {
       console.error('默认截图获取失败:', defaultErr.message);
-      return ['', '']; // 极端情况：返回空字符串，Telegram会忽略
+      // 极端情况：返回1x1透明图
+      const emptyImgBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+      return [emptyImgBase64, emptyImgBase64];
     }
   } finally {
     if (browser) await browser.close();
