@@ -309,7 +309,7 @@ async function sendToTelegram(meta, screenshots, linkType) {
   }
 
   // 第二步：生成Markdown文案（转义特殊字符，避免格式错误）
-  const escapeMarkdown = (text) => text.replace(/[*_\\\[\]()~`>#+\-=|{}.!]/g, '\\$&');
+  /*const escapeMarkdown = (text) => text.replace(/[*_\\\[\]()~`>#+\-=|{}.!]/g, '\\$&');
   let caption;
 
   if (linkType === 'github') {
@@ -322,6 +322,23 @@ async function sendToTelegram(meta, screenshots, linkType) {
     caption = `**🌟 ${escapeMarkdown(meta.title)}**\n\n` +
              `${escapeMarkdown(meta.description || '')}\n\n` +
              `[立即访问](${meta.url})\n\n` +
+             `#实用工具 #网站推荐`;
+  }*/
+  // 1. 先删除原来的 escapeMarkdown 函数（不需要了）
+  // const escapeMarkdown = (text) => text.replace(/[*_\\\[\]()~`>#+\-=|{}.!]/g, '\\$&');
+
+  // 2. 生成 HTML 格式的文案
+  let caption;
+  if (linkType === 'github') {
+    caption = `<b>🔧 ${meta.title}</b>\n` + // 加粗用 <b>
+             `${meta.stars || ''} | ${meta.language || ''}\n\n` + // | 直接用，无需转义
+             `${meta.description || ''}\n\n` +
+             `<a href="${meta.url}">访问仓库</a>\n\n` + // 链接用 <a>
+             `#GitHub #开源 #${meta.language || '工具'}`;
+  } else {
+    caption = `<b>🌟 ${meta.title}</b>\n\n` +
+             `${meta.description || ''}\n\n` +
+             `<a href="${meta.url}">立即访问</a>\n\n` +
              `#实用工具 #网站推荐`;
   }
 
@@ -341,7 +358,10 @@ async function sendToTelegram(meta, screenshots, linkType) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         chat_id: TELEGRAM_CHANNEL_ID,
-        media: media,
+        media: [
+        { type: 'photo', media: fileIds[0], caption: caption, parse_mode: 'HTML' },
+        { type: 'photo', media: fileIds[1] }
+      ],
         disable_notification: false // 开启通知，用户能及时看到
       })
     }
