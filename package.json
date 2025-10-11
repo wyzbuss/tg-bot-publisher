@@ -4,7 +4,8 @@
   "description": "A Serverless function to publish posts to Telegram.",
   "main": "api/sendPost.js",
   "scripts": {
-    "start": "vercel dev"
+    "start": "vercel dev",
+    "postinstall": "puppeteer browsers install chrome@127.0.6533.88"
   },
   "dependencies": {
     "fast-xml-parser": "^4.3.5",
