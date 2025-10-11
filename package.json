@@ -8,7 +8,7 @@
     "postinstall": "puppeteer browsers install chrome@127.0.6533.88"
   },
   "puppeteer": {
-    "cacheDirectory": "./node_modules/puppeteer/.cache" // 指定到项目内的缓存目录
+    "cacheDirectory": "./node_modules/puppeteer/.cache"
   },
   "dependencies": {
     "fast-xml-parser": "^4.3.5",
