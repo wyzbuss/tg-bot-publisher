@@ -1,0 +1,19 @@
+apt update -y && apt install -y curl && curl -fsSL https://get.docker.com | sh && mkdir -p /home/mtproxy && cd /home/mtproxy && cat > docker-compose.yml <<EOF
+version: '3'
+services:
+  mtproxy:
+    image: ellermister/nginx-mtproxy:latest
+    container_name: mtproxy
+    restart: always
+    network_mode: "host"
+    environment:
+      - PORT=64030,55642,443,80,8888,2095
+      - SECRET=ee0123456789abcdef0123456789abcdef7777772e6d6963726f736f66742e636f6d
+      - TLS_DOMAIN=www.microsoft.com
+      - IP_LIMIT=100
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+EOF
+docker compose up -d
