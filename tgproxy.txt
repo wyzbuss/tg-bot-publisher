@@ -14,3 +14,12 @@ iptables -P OUTPUT ACCEPT
 iptables -F
 apt install -y ufw
 ufw disable
+
+# 卸载 nginx 和 apache2
+apt remove -y nginx nginx-common nginx-full apache2
+apt purge -y nginx nginx-common nginx-full apache2
+apt autoremove -y
+
+# 再次确保没有任何进程占用 80 端口
+killall nginx 2>/dev/null
+killall apache2 2>/dev/null
