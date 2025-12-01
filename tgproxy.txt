@@ -7,3 +7,10 @@ systemctl stop nginx 2>/dev/null
 systemctl disable nginx 2>/dev/null
 killall apache2 2>/dev/null
 killall nginx 2>/dev/null
+
+iptables -P INPUT ACCEPT
+iptables -P FORWARD ACCEPT
+iptables -P OUTPUT ACCEPT
+iptables -F
+apt install -y ufw
+ufw disable
