@@ -45,3 +45,39 @@ services:
       options:
         max-size: "10m"
 EOF
+
+cd /home/mtproxy
+docker compose down 2>/dev/null
+
+# 重新写入配置：伪装成 Cloudflare
+cat > docker-compose.yml <<EOF
+version: '3'
+services:
+  mtproxy:
+    image: ellermister/nginx-mtproxy:latest
+    container_name: mtproxy
+    restart: always
+    network_mode: "host"
+    environment:
+      - PORT=443,80
+      
+      # 这是一个新的 Secret，伪装成 www.cloudflare.com
+      # 也就是大多数网站都在用的 CDN，非常安全
+      - SECRET=eed06a9d701a3c749454179377484931557777772e636c6f7564666c6172652e636f6d
+      
+      # 对应的域名
+      - TLS_DOMAIN=www.cloudflare.com
+      
+      - IP_LIMIT=100
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+EOF
+
+# 启动
+docker compose up -d
+
+# 再次确保防火墙允许这两个端口 (以防万一)
+ufw allow 443/tcp
+ufw allow 80/tcp
