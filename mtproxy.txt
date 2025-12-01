@@ -17,3 +17,31 @@ services:
         max-size: "10m"
 EOF
 docker compose up -d
+
+
+cat > docker-compose.yml <<EOF
+version: '3'
+services:
+  mtproxy:
+    image: ellermister/nginx-mtproxy:latest
+    container_name: mtproxy
+    restart: always
+    network_mode: "host"
+    environment:
+      # 开启 443 和 80 两个最稳的端口
+      - PORT=443,80
+      
+      # 使用 FakeTLS 密钥 (伪装成 Google)
+      # 这是一个新的密钥，专门配合 Google 域名
+      - SECRET=ee11111111111111111111111111111111676f6f676c652e636f6d
+      
+      # 伪装域名
+      - TLS_DOMAIN=www.google.com
+      
+      # 流量限制 (防攻击)
+      - IP_LIMIT=100
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+EOF
